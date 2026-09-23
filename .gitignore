@@ -27,6 +27,8 @@ go.work.sum
 # env file
 .env
 /data/
+/config/*
+!/config/config.example.json
 
 # Editor/IDE
 # .idea/

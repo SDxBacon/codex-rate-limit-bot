@@ -100,7 +100,8 @@ func TestSingleDashboardAcrossRestartAndFailure(t *testing.T) {
 	}
 	path := filepath.Join(t.TempDir(), "state.json")
 	state := savedState{}
-	first := renderDashboard(nil, time.Time{}, true)
+	accounts := []accountConfig{{ID: "account-1", Name: "Account 1"}}
+	first := renderDashboard(accounts, nil, nil)
 	fake.postErrorAfterSave = true
 	if err := d.publish(ctx, &state, path, first); err == nil {
 		t.Fatal("expected ambiguous create failure")
@@ -120,25 +121,25 @@ func TestSingleDashboardAcrossRestartAndFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot := &usageSnapshot{FiveHour: usageWindow{82, 1900000000}, Weekly: usageWindow{61, 2000000000}}
-	state.LastUsage, state.LastSuccess = snapshot, time.Unix(1800000000, 0).UTC()
+	state.Accounts = map[string]accountState{"account-1": {LastUsage: snapshot, LastSuccess: time.Unix(1800000000, 0).UTC()}}
 	if err := saveState(path, state); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.publish(ctx, &state, path, renderDashboard(snapshot, state.LastSuccess, false)); err != nil {
+	if err := d.publish(ctx, &state, path, renderDashboard(accounts, state.Accounts, nil)); err != nil {
 		t.Fatal(err)
 	}
 	if fake.posts != 1 || fake.patches != 2 || !strings.Contains(fake.content, "🟢 Account 1") {
 		t.Fatalf("update created another message: %+v", fake)
 	}
 	fake.getError = true
-	if err := d.publish(ctx, &state, path, renderDashboard(snapshot, state.LastSuccess, true)); err == nil {
+	if err := d.publish(ctx, &state, path, renderDashboard(accounts, state.Accounts, map[string]bool{"account-1": true})); err == nil {
 		t.Fatal("expected temporary GET failure")
 	}
 	if fake.posts != 1 {
 		t.Fatal("temporary failure created another message")
 	}
 	fake.getError = false
-	if err := d.publish(ctx, &state, path, renderDashboard(snapshot, state.LastSuccess, true)); err != nil {
+	if err := d.publish(ctx, &state, path, renderDashboard(accounts, state.Accounts, map[string]bool{"account-1": true})); err != nil {
 		t.Fatal(err)
 	}
 	if fake.posts != 1 || fake.patches != 3 || !strings.Contains(fake.content, "🔴 Account 1") {
@@ -150,5 +151,14 @@ func TestSingleDashboardAcrossRestartAndFailure(t *testing.T) {
 	}
 	if fake.posts != 1 || state.MessageID != "456" {
 		t.Fatalf("history recovery duplicated dashboard: %+v", fake)
+	}
+}
+
+func TestDashboardTooLongIsNotPublished(t *testing.T) {
+	d := newDiscordClient("test-token", "123")
+	state := savedState{}
+	err := d.publish(context.Background(), &state, filepath.Join(t.TempDir(), "state.json"), strings.Repeat("測", 2001))
+	if err == nil || state.MessageID != "" {
+		t.Fatalf("overlong dashboard was accepted: %v", err)
 	}
 }

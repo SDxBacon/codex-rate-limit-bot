@@ -136,8 +136,7 @@ func (d *discordClient) getMessage(ctx context.Context, id string) (discordMessa
 }
 
 func isDashboard(msg discordMessage, botID string) bool {
-	return msg.Author.ID == botID && strings.HasPrefix(msg.Content, dashboardTitle+"\n\n") &&
-		strings.Contains(msg.Content, "Account 1\n")
+	return msg.Author.ID == botID && strings.HasPrefix(msg.Content, dashboardTitle+"\n\n")
 }
 
 // findDashboard pages through the channel until it reaches the beginning.
@@ -195,6 +194,9 @@ func (d *discordClient) editMessage(ctx context.Context, id, content string) (bo
 }
 
 func (d *discordClient) publish(ctx context.Context, state *savedState, statePath, content string) error {
+	if len([]rune(content)) > 2000 {
+		return errors.New("dashboard exceeds Discord's 2000-character limit")
+	}
 	if state.MessageID != "" {
 		msg, found, err := d.getMessage(ctx, state.MessageID)
 		if err != nil {

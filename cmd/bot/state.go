@@ -10,7 +10,11 @@ import (
 )
 
 type savedState struct {
-	MessageID   string         `json:"message_id"`
+	MessageID string                  `json:"message_id"`
+	Accounts  map[string]accountState `json:"accounts,omitempty"`
+}
+
+type accountState struct {
 	LastUsage   *usageSnapshot `json:"last_usage,omitempty"`
 	LastSuccess time.Time      `json:"last_success,omitempty"`
 }
@@ -23,12 +27,30 @@ func loadState(path string) (savedState, error) {
 	if err != nil {
 		return savedState{}, err
 	}
-	var state savedState
-	if err := json.Unmarshal(b, &state); err != nil {
+	var disk struct {
+		savedState
+		LastUsage   *usageSnapshot `json:"last_usage"`
+		LastSuccess time.Time      `json:"last_success"`
+	}
+	if err := json.Unmarshal(b, &disk); err != nil {
 		return savedState{}, fmt.Errorf("decode state: %w", err)
 	}
-	if (state.LastUsage == nil) != state.LastSuccess.IsZero() {
+	state := disk.savedState
+	if (disk.LastUsage == nil) != disk.LastSuccess.IsZero() {
 		return savedState{}, errors.New("state has incomplete last-success data")
+	}
+	if disk.LastUsage != nil {
+		if state.Accounts == nil {
+			state.Accounts = make(map[string]accountState)
+		}
+		if _, exists := state.Accounts["account-1"]; !exists {
+			state.Accounts["account-1"] = accountState{LastUsage: disk.LastUsage, LastSuccess: disk.LastSuccess}
+		}
+	}
+	for id, account := range state.Accounts {
+		if (account.LastUsage == nil) != account.LastSuccess.IsZero() {
+			return savedState{}, fmt.Errorf("state has incomplete last-success data for %s", id)
+		}
 	}
 	return state, nil
 }
