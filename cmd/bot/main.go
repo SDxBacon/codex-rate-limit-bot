@@ -88,7 +88,7 @@ func probeAccounts(ctx context.Context, accounts []accountConfig, root, binary s
 func runCycle(ctx context.Context, d *discordClient, disk *savedState, statePath, binary, accountRoot string,
 	config appConfig, states map[string]accountState, probe usageProbe, hello helloRunner) {
 	publish := func() {
-		content := renderDashboard(config.Accounts, states)
+		content := renderDashboard(config.Accounts, states, time.Now())
 		postCtx, postCancel := context.WithTimeout(ctx, 60*time.Second)
 		defer postCancel()
 		if err := d.publish(postCtx, disk, statePath, content); err != nil {

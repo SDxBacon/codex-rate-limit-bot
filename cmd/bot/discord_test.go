@@ -101,7 +101,7 @@ func TestSingleDashboardAcrossRestartAndFailure(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	state := savedState{}
 	accounts := []accountConfig{{ID: "account-1", Name: "Account 1"}}
-	first := renderDashboard(accounts, nil)
+	first := renderDashboard(accounts, nil, time.Unix(1800000000, 0))
 	fake.postErrorAfterSave = true
 	if err := d.publish(ctx, &state, path, first); err == nil {
 		t.Fatal("expected ambiguous create failure")
@@ -125,27 +125,27 @@ func TestSingleDashboardAcrossRestartAndFailure(t *testing.T) {
 	if err := saveState(path, state); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.publish(ctx, &state, path, renderDashboard(accounts, states)); err != nil {
+	if err := d.publish(ctx, &state, path, renderDashboard(accounts, states, time.Unix(1800000000, 0))); err != nil {
 		t.Fatal(err)
 	}
-	if fake.posts != 1 || fake.patches != 2 || !strings.Contains(fake.content, "🟢 Account 1") {
+	if fake.posts != 1 || fake.patches != 2 || !strings.Contains(fake.content, "### Account 1\n> 🟢 **讀取正常**") {
 		t.Fatalf("update created another message: %+v", fake)
 	}
 	fake.getError = true
 	failedState := states["account-1"]
 	failedState.Failed = true
 	states["account-1"] = failedState
-	if err := d.publish(ctx, &state, path, renderDashboard(accounts, states)); err == nil {
+	if err := d.publish(ctx, &state, path, renderDashboard(accounts, states, time.Unix(1800000000, 0))); err == nil {
 		t.Fatal("expected temporary GET failure")
 	}
 	if fake.posts != 1 {
 		t.Fatal("temporary failure created another message")
 	}
 	fake.getError = false
-	if err := d.publish(ctx, &state, path, renderDashboard(accounts, states)); err != nil {
+	if err := d.publish(ctx, &state, path, renderDashboard(accounts, states, time.Unix(1800000000, 0))); err != nil {
 		t.Fatal(err)
 	}
-	if fake.posts != 1 || fake.patches != 3 || !strings.Contains(fake.content, "🔴 Account 1") {
+	if fake.posts != 1 || fake.patches != 3 || !strings.Contains(fake.content, "### Account 1\n> 🔴 **讀取失敗**") {
 		t.Fatalf("failed state did not preserve and edit message: %+v", fake)
 	}
 	state.MessageID = "" // Simulate a lost message ID while the dashboard remains.
@@ -154,6 +154,51 @@ func TestSingleDashboardAcrossRestartAndFailure(t *testing.T) {
 	}
 	if fake.posts != 1 || state.MessageID != "456" {
 		t.Fatalf("history recovery duplicated dashboard: %+v", fake)
+	}
+	fake.content = "1. **Account 1** ⚪\n  - **5-Hour**   —\n  - **Weekly**   —"
+	state.MessageID = ""
+	if err := d.publish(ctx, &state, path, first); err != nil {
+		t.Fatal(err)
+	}
+	if fake.posts != 1 || state.MessageID != "456" || fake.content != first {
+		t.Fatalf("previous unheaded dashboard was not edited in place: %+v", fake)
+	}
+	fake.content = dashboardTitle + "\n\nlegacy account"
+	state.MessageID = ""
+	if err := d.publish(ctx, &state, path, first); err != nil {
+		t.Fatal(err)
+	}
+	if fake.posts != 1 || state.MessageID != "456" || fake.content != first {
+		t.Fatalf("legacy dashboard was not edited in place: %+v", fake)
+	}
+}
+
+func TestIsDashboardAcceptsCurrentAndLegacyFormats(t *testing.T) {
+	current := renderDashboard([]accountConfig{{ID: "one", Name: "Personal"}}, nil, time.Unix(1800000000, 0))
+	msg := discordMessage{Content: current}
+	msg.Author.ID = "99"
+	unrelated := discordMessage{Content: "1. **Personal** ⚪\n  - unrelated"}
+	unrelated.Author.ID = "99"
+	if !isDashboard(msg, "99") || isDashboard(msg, "another-bot") ||
+		isDashboard(unrelated, "99") {
+		t.Fatal("current dashboard identification failed")
+	}
+	msg = discordMessage{Content: "1. **Personal** ⚪\n  - **5-Hour**   —\n  - **Weekly**   —"}
+	msg.Author.ID = "99"
+	if !isDashboard(msg, "99") {
+		t.Fatal("previous unheaded dashboard was not recognized")
+	}
+	for _, heading := range []string{legacyDashboardHeading, dashboardTitle} {
+		msg := discordMessage{Content: heading + "\n\naccount"}
+		msg.Author.ID = "99"
+		if !isDashboard(msg, "99") || isDashboard(msg, "another-bot") {
+			t.Fatalf("unexpected dashboard identification for %q", heading)
+		}
+	}
+	msg = discordMessage{Content: dashboardHeading + "\n\nnot an account"}
+	msg.Author.ID = "99"
+	if isDashboard(msg, "99") {
+		t.Fatal("new heading without an account was accepted")
 	}
 }
 

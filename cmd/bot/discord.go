@@ -137,7 +137,22 @@ func (d *discordClient) getMessage(ctx context.Context, id string) (discordMessa
 }
 
 func isDashboard(msg discordMessage, botID string) bool {
-	return msg.Author.ID == botID && strings.HasPrefix(msg.Content, dashboardTitle+"\n\n")
+	if msg.Author.ID != botID {
+		return false
+	}
+	if strings.HasPrefix(msg.Content, dashboardHeading+"\n\n### ") ||
+		strings.HasPrefix(msg.Content, legacyDashboardHeading+"\n\n") ||
+		strings.HasPrefix(msg.Content, dashboardTitle+"\n\n") {
+		return true
+	}
+	lines := strings.SplitN(msg.Content, "\n", 4)
+	if len(lines) < 3 || !strings.HasPrefix(lines[0], "1. **") ||
+		!strings.HasPrefix(lines[1], "  - **5-Hour**   ") ||
+		!strings.HasPrefix(lines[2], "  - **Weekly**   ") {
+		return false
+	}
+	return strings.HasSuffix(lines[0], "** ⚪") || strings.HasSuffix(lines[0], "** 🟢") ||
+		strings.HasSuffix(lines[0], "** 🔴")
 }
 
 // findDashboard pages through the channel until it reaches the beginning.

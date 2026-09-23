@@ -28,19 +28,39 @@
    ```
 
    `id` 是穩定的狀態識別碼，須唯一；`name` 是 Discord 顯示名稱；`home` 是 `~/.codex-accounts` 下的相對目錄，也須唯一。帳號顯示順序依陣列順序。修改 JSON 後，下一次五分鐘輪詢便會套用；無效設定會記錄錯誤並沿用前一次有效設定。請以正常的檔案取代方式更新 `config/config.json`，容器掛載整個 `config/` 目錄，可看到換檔後的新內容。
-5. 執行 `docker compose up -d --build`，再以 `docker compose logs -f codex-ratelimite-bot` 檢查啟動結果。Discord 頻道應只有一則 `Codex Usage Monitor` 儀表板。
+5. 執行 `docker compose up -d --build`，再以 `docker compose logs -f codex-ratelimite-bot` 檢查啟動結果。Discord 頻道應只有一則帳號用量儀表板。
 
 `config/` 只會提交範例檔；實際設定 `config/config.json` 和 `data/` 不會提交到 Git。容器唯讀掛載 `config/`，並以執行 Compose 的使用者權限掛載帳號及資料目錄。請限制主機上的登入資料與設定檔權限。
 
 ## 更新與狀態
 
-使用量每五分鐘查詢一次。`data/state.json` 只保存 Discord 訊息 ID；用量、timer 判定和 `hello` 嘗試時間只保存在記憶體。升級時，舊狀態檔中的用量欄位會移除，但原 Discord 訊息 ID 會沿用。重啟後首筆 0% 讀值會顯示 `Unknown`，下一筆確認仍滾動時可能再次送出 `hello`。
+使用量每五分鐘查詢一次。`data/state.json` 只保存 Discord 訊息 ID；用量、timer 判定和 `hello` 嘗試時間只保存在記憶體。升級時，舊狀態檔中的用量欄位會移除，但原 Discord 訊息 ID 會沿用。重啟後首筆 0% 讀值會顯示「5小時計時器狀態未知」，下一筆確認仍滾動時可能再次送出 `hello`。
 
-5-hour reset timer 有 `Active`、`Inactive (rolling)` 和 `Unknown` 三態。只有兩筆間隔至少三分鐘、少於五小時且屬於同一週期的 0% 讀值顯示等量後移時，才判定為 `Inactive (rolling)`。bot 僅在這個狀態、weekly 未達 100%，且本次執行近五小時未嘗試過時送出 `hello`。每次嘗試使用該帳號的 `CODEX_HOME`、`gpt-6-luna`、low effort、唯讀 sandbox 和臨時 session，最多執行 90 秒；送後再獨立讀取一次用量。訊息上的 `Bot 發送 hello` 時間只代表 bot 的嘗試，無法判定由誰啟動 timer。帳號 home 改變時，判定基準會重新建立。
+Discord 訊息以帳號為卡片，狀態在上方，兩種額度的進度條和百分比都表示**剩餘量**。例如：
+
+```text
+## Codex 額度
+
+### Personal
+> 🟢 **讀取正常** · 5小時計時器運作中
+> **5 小時**　`█░░░░░░░░░`　**18% left** · 將於 <t:1900000000:t>（<t:1900000000:R>）重設
+> **每週**　　`███░░░░░░░`　**39% left** · 將於 <t:2000000000:d>（<t:2000000000:R>）重設
+-# <t:1800000000:R> 更新
+
+### Work
+> 🔴 **讀取失敗** · 5小時計時器狀態未知
+> **5 小時**　`██████░░░░`　**67% left＊** · 將於 <t:1900000000:s>（<t:1900000000:R>）重設
+> **每週**　　`████████░░`　**82% left＊** · 將於 <t:2000000000:d>（<t:2000000000:R>）重設
+-# ＊上次成功讀取的資料 · <t:1800000000:R> 更新
+```
+
+範例數值僅供排版參考；實際時間使用 Discord 動態時間格式。每週重設時間距離超過 24 小時或已過期時，括號外顯示短日期（`:d`）；進入重設前 24 小時後，改顯示短時間（`:t`）。括號內一直使用相對時間（`:R`），樣式會在下一次五分鐘更新時切換。首次讀取前會顯示 ⚪「等待首次讀取」；失敗且沒有舊資料時顯示 `—`。有 hello 嘗試紀錄時，卡片下方會另顯示「Bot 嘗試 hello」及時間，這不代表計時器已成功啟動。
+
+5-hour reset timer 有 `Active`、`Inactive (rolling)` 和 `Unknown` 三態，訊息分別顯示「5小時計時器運作中」、「5小時計時器未啟動（重設時間滾動）」和「5小時計時器狀態未知」。只有兩筆間隔至少三分鐘、少於五小時且屬於同一週期的 0% 讀值顯示等量後移時，才判定為 `Inactive (rolling)`。bot 僅在這個狀態、weekly 未達 100%，且本次執行近五小時未嘗試過時送出 `hello`。每次嘗試使用該帳號的 `CODEX_HOME`、`gpt-6-luna`、low effort、唯讀 sandbox 和臨時 session，最多執行 90 秒；送後再獨立讀取一次用量。訊息上的「Bot 嘗試 hello」時間只代表 bot 的嘗試，無法判定由誰啟動 timer。帳號 home 改變時，判定基準會重新建立。
 
 從舊版 `codex-monitor` 服務升級時，先執行 `docker compose down --remove-orphans`，再執行 `docker compose up -d --build`，避免兩個服務同時更新訊息。
 
-某帳號查詢失敗時，該帳號保留上次成功資料並顯示失敗，timer 暫列 `Unknown`；從未成功時顯示無用量資料。Discord 更新暫時失敗時，程式不會直接另發一則訊息。若所有帳號內容超過 Discord 單則訊息 2,000 字元限制，程式會記錄錯誤並保留原訊息。錯誤會記錄於容器日誌，憑證及 token 不會記錄。
+某帳號查詢失敗時，該帳號保留上次成功資料並顯示失敗，5小時計時器暫列「狀態未知」；從未成功時顯示無用量資料。Discord 更新暫時失敗時，程式不會直接另發一則訊息。若所有帳號內容超過 Discord 單則訊息 2,000 字元限制，程式會記錄錯誤並保留原訊息。錯誤會記錄於容器日誌，憑證及 token 不會記錄。
 
 ## 本機檢查
 
