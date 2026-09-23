@@ -34,14 +34,14 @@ func TestDashboardAccountsInConfigOrder(t *testing.T) {
 	accounts := []accountConfig{{ID: "second", Name: "Personal"}, {ID: "first", Name: "Work"}}
 	snapshot := &usageSnapshot{FiveHour: usageWindow{UsedPercent: 82, ResetsAt: 1900000000}, Weekly: usageWindow{UsedPercent: 61, ResetsAt: 2000000000}}
 	last := time.Unix(1800000000, 0)
-	states := map[string]accountState{"first": {LastUsage: snapshot, LastSuccess: last}}
-	got := renderDashboard(accounts, states, map[string]bool{"first": true})
-	if !strings.Contains(got, "⚪ Personal\n5-Hour   —\nWeekly   —\nInitializing...") ||
+	states := map[string]accountState{"first": {LastUsage: snapshot, LastSuccess: last, Failed: true, Timer: timerUnknown}}
+	got := renderDashboard(accounts, states)
+	if !strings.Contains(got, "⚪ Personal\n5-Hour   —   5-hour reset timer: ⚪ Unknown\nWeekly   —\nInitializing...") ||
 		!strings.Contains(got, "🔴 Work") || strings.Index(got, "Personal") > strings.Index(got, "Work") {
 		t.Fatal(got)
 	}
 	for _, part := range []string{
-		"5-Hour   █░░░░░░░░░  18%   Reset <t:1900000000:t> (<t:1900000000:R>)",
+		"5-Hour   █░░░░░░░░░  18%   Reset <t:1900000000:t> (<t:1900000000:R>)   5-hour reset timer: ⚪ Unknown",
 		"Weekly   ███░░░░░░░  39%   Reset <t:2000000000:d> (<t:2000000000:R>)",
 		"Update failed · Last updated <t:1800000000:R>",
 	} {
@@ -51,5 +51,14 @@ func TestDashboardAccountsInConfigOrder(t *testing.T) {
 	}
 	if strings.Contains(got, "Account 3") {
 		t.Fatal("fixed template remains", got)
+	}
+	state := states["first"]
+	state.Timer = timerActive
+	state.HelloAt = time.Unix(1800000100, 0)
+	states["first"] = state
+	got = renderDashboard(accounts, states)
+	if !strings.Contains(got, "5-hour reset timer: 🟢 Active") ||
+		!strings.Contains(got, "Bot 發送 hello <t:1800000100:f>") {
+		t.Fatal(got)
 	}
 }

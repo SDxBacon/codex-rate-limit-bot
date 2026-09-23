@@ -10,7 +10,6 @@ services:
       ACCOUNTS_ROOT: /codex-accounts
       CONFIG_PATH: /config/config.json
       STATE_PATH: /data/state.json
-      STATE_SAVE_INTERVAL: ${STATE_SAVE_INTERVAL:-30m}
     volumes:
       - ./config:/config:ro
       - ${HOME:?Set HOME}/.codex-accounts:/codex-accounts:rw

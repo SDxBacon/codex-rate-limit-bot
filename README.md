@@ -1,6 +1,6 @@
 # codex-ratelimite-bot
 
-在私人 Discord 文字頻道維護一則 Codex 用量訊息。百分比和進度條表示**剩餘量**（100% 減去 Codex 回傳的已用百分比）。程式每五分鐘依 `config/config.json` 的帳號順序，在容器內逐一使用 `codex app-server --stdio` 讀取用量，並編輯同一則訊息。各帳號的失敗狀態和上次成功資料互不影響。
+在私人 Discord 文字頻道維護一則 Codex 用量訊息。百分比和進度條表示**剩餘量**（100% 減去 Codex 回傳的已用百分比）。程式每五分鐘依 `config/config.json` 的帳號順序，在容器內逐一使用 `codex app-server --stdio` 讀取用量，並編輯同一則訊息。各帳號的失敗狀態和上次成功資料互不影響。若連續讀值確認 5-hour reset time 正以相同速度後移、weekly 尚未滿額，bot 會以該帳號送出一次 `hello` 嘗試啟動計時器。
 
 ## Raspberry Pi 部署
 
@@ -34,11 +34,13 @@
 
 ## 更新與狀態
 
-使用量每五分鐘查詢一次。成功用量預設每 30 分鐘寫入 `data/state.json`；調整 `.env` 的 `STATE_SAVE_INTERVAL`（例如 `1h`）後，執行 `docker compose up -d` 重新建立容器即可生效，無須重建映像。Discord 訊息 ID 變更時仍立即保存。若容器在兩次保存之間重啟，最近的用量與更新時間最多可能回退一個保存間隔。
+使用量每五分鐘查詢一次。`data/state.json` 只保存 Discord 訊息 ID；用量、timer 判定和 `hello` 嘗試時間只保存在記憶體。升級時，舊狀態檔中的用量欄位會移除，但原 Discord 訊息 ID 會沿用。重啟後首筆 0% 讀值會顯示 `Unknown`，下一筆確認仍滾動時可能再次送出 `hello`。
 
-從單帳號舊版升級時，原 `data/state.json` 的用量與最後成功時間會轉到 `account-1`，原 Discord 訊息 ID 會沿用。因此第一個帳號請使用 `account-1` 這個 ID。從舊版 `codex-monitor` 服務升級時，先執行 `docker compose down --remove-orphans`，再執行 `docker compose up -d --build`，避免兩個服務同時更新訊息。
+5-hour reset timer 有 `Active`、`Inactive (rolling)` 和 `Unknown` 三態。只有兩筆間隔至少三分鐘、少於五小時且屬於同一週期的 0% 讀值顯示等量後移時，才判定為 `Inactive (rolling)`。bot 僅在這個狀態、weekly 未達 100%，且本次執行近五小時未嘗試過時送出 `hello`。每次嘗試使用該帳號的 `CODEX_HOME`、`gpt-6-luna`、low effort、唯讀 sandbox 和臨時 session，最多執行 90 秒；送後再獨立讀取一次用量。訊息上的 `Bot 發送 hello` 時間只代表 bot 的嘗試，無法判定由誰啟動 timer。帳號 home 改變時，判定基準會重新建立。
 
-某帳號查詢失敗時，該帳號保留上次成功資料並顯示失敗；從未成功時顯示無用量資料。Discord 更新暫時失敗時，程式不會直接另發一則訊息。若所有帳號內容超過 Discord 單則訊息 2,000 字元限制，程式會記錄錯誤並保留原訊息。錯誤會記錄於容器日誌，憑證及 token 不會記錄。
+從舊版 `codex-monitor` 服務升級時，先執行 `docker compose down --remove-orphans`，再執行 `docker compose up -d --build`，避免兩個服務同時更新訊息。
+
+某帳號查詢失敗時，該帳號保留上次成功資料並顯示失敗，timer 暫列 `Unknown`；從未成功時顯示無用量資料。Discord 更新暫時失敗時，程式不會直接另發一則訊息。若所有帳號內容超過 Discord 單則訊息 2,000 字元限制，程式會記錄錯誤並保留原訊息。錯誤會記錄於容器日誌，憑證及 token 不會記錄。
 
 ## 本機檢查
 

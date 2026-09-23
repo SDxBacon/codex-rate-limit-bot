@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 )
 
 type discordClient struct {
@@ -194,7 +195,11 @@ func (d *discordClient) editMessage(ctx context.Context, id, content string) (bo
 }
 
 func (d *discordClient) publish(ctx context.Context, state *savedState, statePath, content string) error {
-	if len([]rune(content)) > 2000 {
+	length := 0
+	for _, r := range content {
+		length += utf16.RuneLen(r)
+	}
+	if length > 2000 {
 		return errors.New("dashboard exceeds Discord's 2000-character limit")
 	}
 	if state.MessageID != "" {

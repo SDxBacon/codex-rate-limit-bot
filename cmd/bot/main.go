@@ -12,62 +12,91 @@ import (
 )
 
 const pollInterval = 5 * time.Minute
-const defaultStateSaveInterval = 30 * time.Minute
 
 type usageProbe func(context.Context, string, string) (usageSnapshot, error)
 
-func parseStateSaveInterval(raw string) (time.Duration, error) {
-	if raw == "" {
-		return defaultStateSaveInterval, nil
-	}
-	duration, err := time.ParseDuration(raw)
-	if err != nil || duration <= 0 {
-		return 0, fmt.Errorf("STATE_SAVE_INTERVAL must be a positive Go duration")
-	}
-	return duration, nil
-}
-
-func probeAccounts(ctx context.Context, accounts []accountConfig, root, binary string, state *savedState, probe usageProbe, now func() time.Time) (map[string]bool, bool) {
-	failed := make(map[string]bool)
-	anySuccess := false
-	if state.Accounts == nil {
-		state.Accounts = make(map[string]accountState)
-	}
+func probeAccounts(ctx context.Context, accounts []accountConfig, root, binary string, states map[string]accountState,
+	probe usageProbe, hello helloRunner, now func() time.Time, onAttempt func()) {
+	configured := make(map[string]bool, len(accounts))
 	for _, account := range accounts {
+		configured[account.ID] = true
+		home := filepath.Join(root, account.Home)
+		state := states[account.ID]
+		if state.Home != home {
+			state = accountState{Home: home}
+		}
+		state.expireHello(now().UTC())
 		probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-		snapshot, err := probe(probeCtx, binary, filepath.Join(root, account.Home))
+		snapshot, err := probe(probeCtx, binary, home)
 		cancel()
 		if err != nil {
-			failed[account.ID] = true
+			state.Timer = timerUnknown
+			state.Failed = true
+			states[account.ID] = state
 			log.Printf("Codex usage read failed for %s: %v", account.ID, err)
 			continue
 		}
-		state.Accounts[account.ID] = accountState{LastUsage: &snapshot, LastSuccess: now().UTC()}
-		anySuccess = true
+		readAt := now().UTC()
+		state.recordUsage(snapshot, readAt)
+		states[account.ID] = state
+		if !state.shouldSendHello(readAt) {
+			continue
+		}
+		attemptAt := now().UTC()
+		state.LastAttempt = attemptAt
+		state.HelloAt = attemptAt
+		state.HelloReset = snapshot.FiveHour.ResetsAt
+		state.Timer = timerUnknown
+		states[account.ID] = state
+		helloCtx, helloCancel := context.WithTimeout(ctx, helloTimeout)
+		err = hello(helloCtx, binary, home)
+		helloCancel()
+		if err != nil {
+			log.Printf("Codex hello failed for %s: %v", account.ID, err)
+		}
+		// This read has its own deadline, regardless of how long hello took.
+		recheckCtx, recheckCancel := context.WithTimeout(ctx, probeTimeout)
+		recheck, err := probe(recheckCtx, binary, home)
+		recheckCancel()
+		if err != nil {
+			state.Failed = true
+			log.Printf("Codex usage recheck failed for %s: %v", account.ID, err)
+		} else {
+			recheckAt := now().UTC()
+			dr := time.Duration(recheck.FiveHour.ResetsAt-snapshot.FiveHour.ResetsAt) * time.Second
+			state.recordUsage(recheck, recheckAt)
+			if recheck.FiveHour.UsedPercent == 0 {
+				state.Timer = timerUnknown
+			} else if state.Timer == timerUnknown &&
+				recheckAt.Before(time.Unix(recheck.FiveHour.ResetsAt, 0)) &&
+				near(dr, 0) && !(dr >= timerTolerance && near(dr, recheckAt.Sub(readAt))) {
+				state.Timer = timerActive
+			}
+		}
+		states[account.ID] = state
+		if onAttempt != nil {
+			onAttempt()
+		}
 	}
-	return failed, anySuccess
+	for id := range states {
+		if !configured[id] {
+			delete(states, id)
+		}
+	}
 }
 
-func persistUsageIfDue(statePath string, state savedState, now time.Time, lastSave *time.Time, interval time.Duration, anySuccess bool) {
-	if !anySuccess || (!lastSave.IsZero() && now.Sub(*lastSave) < interval) {
-		return
+func runCycle(ctx context.Context, d *discordClient, disk *savedState, statePath, binary, accountRoot string,
+	config appConfig, states map[string]accountState, probe usageProbe, hello helloRunner) {
+	publish := func() {
+		content := renderDashboard(config.Accounts, states)
+		postCtx, postCancel := context.WithTimeout(ctx, 60*time.Second)
+		defer postCancel()
+		if err := d.publish(postCtx, disk, statePath, content); err != nil {
+			log.Printf("Discord dashboard update failed: %v", err)
+		}
 	}
-	if err := saveState(statePath, state); err != nil {
-		log.Printf("save last successful usage: %v", err)
-		return
-	}
-	*lastSave = now
-}
-
-func runCycle(ctx context.Context, d *discordClient, state *savedState, statePath, binary, accountRoot string, config appConfig, interval time.Duration, lastSave *time.Time, probe usageProbe) {
-	failed, anySuccess := probeAccounts(ctx, config.Accounts, accountRoot, binary, state, probe, time.Now)
-	persistUsageIfDue(statePath, *state, time.Now(), lastSave, interval, anySuccess)
-	content := renderDashboard(config.Accounts, state.Accounts, failed)
-	postCtx, postCancel := context.WithTimeout(ctx, 60*time.Second)
-	defer postCancel()
-	if err := d.publish(postCtx, state, statePath, content); err != nil {
-		log.Printf("Discord dashboard update failed: %v", err)
-	}
+	probeAccounts(ctx, config.Accounts, accountRoot, binary, states, probe, hello, time.Now, publish)
+	publish()
 }
 
 func run(ctx context.Context) error {
@@ -84,10 +113,6 @@ func run(ctx context.Context) error {
 	}
 	if token == "" || !validSnowflake(channelID) || accountRoot == "" {
 		return fmt.Errorf("DISCORD_BOT_TOKEN, numeric DISCORD_CHANNEL_ID, and ACCOUNTS_ROOT are required")
-	}
-	interval, err := parseStateSaveInterval(os.Getenv("STATE_SAVE_INTERVAL"))
-	if err != nil {
-		return err
 	}
 	config, err := loadConfig(configPath)
 	if err != nil {
@@ -108,8 +133,12 @@ func run(ctx context.Context) error {
 	if binary == "" {
 		binary = "codex"
 	}
-	var lastSave time.Time
-	runCycle(ctx, d, &state, statePath, binary, accountRoot, config, interval, &lastSave, probeUsage)
+	// Rewrite legacy state once, removing persisted usage while retaining the ID.
+	if err := saveState(statePath, state); err != nil {
+		return fmt.Errorf("normalize state: %w", err)
+	}
+	states := make(map[string]accountState)
+	runCycle(ctx, d, &state, statePath, binary, accountRoot, config, states, probeUsage, sendHello)
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	for {
@@ -122,7 +151,7 @@ func run(ctx context.Context) error {
 			if reloadErr != nil {
 				log.Printf("reload config failed; using previous config: %v", reloadErr)
 			}
-			runCycle(ctx, d, &state, statePath, binary, accountRoot, config, interval, &lastSave, probeUsage)
+			runCycle(ctx, d, &state, statePath, binary, accountRoot, config, states, probeUsage, sendHello)
 		}
 	}
 }
