@@ -1,13 +1,15 @@
-FROM --platform=$BUILDPLATFORM golang:1.26-bookworm AS build
+FROM golang:1.26-bookworm AS build
 
 WORKDIR /src
 COPY go.mod ./
 COPY cmd/bot/ ./cmd/bot/
-ARG TARGETOS
-ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/codex-ratelimite-bot ./cmd/bot
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/codex-ratelimite-bot ./cmd/bot
 
 FROM node:22-bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 ARG CODEX_VERSION=0.156.0
 RUN npm install -g --omit=dev @openai/codex@${CODEX_VERSION} \
