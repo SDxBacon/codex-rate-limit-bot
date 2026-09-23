@@ -1,5 +1,5 @@
 services:
-  codex-monitor:
+  codex-ratelimite-bot:
     build: .
     platform: linux/arm64
     restart: unless-stopped

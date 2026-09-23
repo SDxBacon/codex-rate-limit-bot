@@ -1,3 +1,3 @@
-module github.com/SDxBacon/codex-rate-limit-bot
+module github.com/SDxBacon/codex-ratelimite-bot
 
 go 1.24

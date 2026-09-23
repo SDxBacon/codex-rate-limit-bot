@@ -56,7 +56,7 @@ func (d *discordClient) request(ctx context.Context, method, path string, payloa
 			return nil, 0, err
 		}
 		req.Header.Set("Authorization", "Bot "+d.token)
-		req.Header.Set("User-Agent", "CodexUsageDiscordBot/1.0")
+		req.Header.Set("User-Agent", "CodexRatelimiteBot/1.0")
 		if payload != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}

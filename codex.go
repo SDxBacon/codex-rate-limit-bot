@@ -167,7 +167,7 @@ func probeUsage(ctx context.Context, binary, codexHome string) (usageSnapshot, e
 	}
 
 	init := map[string]any{"method": "initialize", "id": 1, "params": map[string]any{
-		"clientInfo": map[string]string{"name": "codex_usage_discord_bot", "title": "Codex Usage Discord Bot", "version": "1.0.0"},
+		"clientInfo": map[string]string{"name": "codex_ratelimite_bot", "title": "Codex Ratelimite Bot", "version": "1.0.0"},
 	}}
 	if err := write(init); err != nil {
 		return usageSnapshot{}, err
