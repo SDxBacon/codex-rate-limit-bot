@@ -1,0 +1,14 @@
+services:
+  codex-monitor:
+    build: .
+    platform: linux/arm64
+    restart: unless-stopped
+    user: "${HOST_UID:?Set HOST_UID in .env}:${HOST_GID:?Set HOST_GID in .env}"
+    environment:
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:?Set DISCORD_BOT_TOKEN in .env}
+      DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID:?Set DISCORD_CHANNEL_ID in .env}
+      CODEX_HOME: /codex-accounts/account-1
+      STATE_PATH: /data/state.json
+    volumes:
+      - ${HOME:?Set HOME}/.codex:/codex-accounts/account-1:rw
+      - ./data:/data:rw
