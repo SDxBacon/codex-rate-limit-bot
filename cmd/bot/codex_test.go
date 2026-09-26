@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +33,98 @@ func TestParseUsage(t *testing.T) {
 		if _, err := parseUsage(json.RawMessage(raw)); err == nil {
 			t.Fatalf("expected invalid usage for %s", raw)
 		}
+	}
+}
+
+func TestProbeUsageLetsWrapperReapChild(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "codex")
+	marker := filepath.Join(dir, "reaped")
+	script := `#!/bin/sh
+if [ "$1" != native ]; then
+  "$0" native <&0 &
+  child=$!
+  wait "$child" || exit 12
+  printf 'reaped' > "$REAP_MARKER"
+  exit 0
+fi
+read init || exit 1
+printf '{"id":1,"result":{}}\n'
+read initialized || exit 2
+read request || exit 3
+printf '{"id":2,"result":%s}\n' '` + validRateResult + `'
+while IFS= read -r line; do :; done
+`
+	if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REAP_MARKER", marker)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for i := 0; i < 5; i++ {
+		_ = os.Remove(marker)
+		if _, err := probeUsage(ctx, bin, dir); err != nil {
+			t.Fatal(err)
+		}
+		if b, err := os.ReadFile(marker); err != nil || string(b) != "reaped" {
+			t.Fatalf("wrapper did not reap its child: %q, %v", b, err)
+		}
+	}
+}
+
+func TestProbeUsageReportsExitWithoutSecrets(t *testing.T) {
+	for _, stage := range []string{"initialize", "account/rateLimits/read"} {
+		t.Run(stage, func(t *testing.T) {
+			dir := t.TempDir()
+			bin := filepath.Join(dir, "codex")
+			script := "#!/bin/sh\nread init\n"
+			if stage != "initialize" {
+				script += "printf '{\"id\":1,\"result\":{}}\\n'\nread initialized\nread request\n"
+			}
+			script += "printf 'private-token-value\\nError: Resource temporarily unavailable (os error 11)\\n' >&2\nexit 11\n"
+			if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := probeUsage(ctx, bin, dir)
+			if !errors.Is(err, io.EOF) {
+				t.Fatalf("expected EOF, got %v", err)
+			}
+			for _, want := range []string{stage, "exit status 11", "resource temporarily unavailable"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("missing %q in %v", want, err)
+				}
+			}
+			if strings.Contains(err.Error(), "private-token-value") {
+				t.Fatalf("stderr secret leaked: %v", err)
+			}
+		})
+	}
+}
+
+func TestProbeUsageBoundsUncooperativeShutdown(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "codex")
+	script := `#!/bin/sh
+read init
+printf '{"id":1,"result":{}}\n'
+read initialized
+read request
+printf '{"id":2,"result":%s}\n' '` + validRateResult + `'
+exec sleep 30
+`
+	if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	if _, err := probeUsage(ctx, bin, dir); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("shutdown took %v", elapsed)
 	}
 }
 

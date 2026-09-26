@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"os/exec"
 	"time"
 )
 
@@ -87,38 +85,61 @@ func parseUsage(raw json.RawMessage) (usageSnapshot, error) {
 
 // probeUsage starts the Codex CLI for one bounded read. A fresh process on each
 // poll also recovers automatically if a previous app-server exited or hung.
-func probeUsage(ctx context.Context, binary, codexHome string) (usageSnapshot, error) {
-	cmd := exec.CommandContext(ctx, binary, "app-server", "--stdio")
-	cmd.Env = append(os.Environ(), "CODEX_HOME="+codexHome)
+func probeUsage(ctx context.Context, binary, codexHome string) (snapshot usageSnapshot, probeErr error) {
+	cmd := codexCommand(ctx, binary, codexHome, "app-server", "--stdio")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return usageSnapshot{}, err
 	}
+	defer stdin.Close()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return usageSnapshot{}, err
 	}
-	cmd.Stderr = io.Discard
+	defer stdout.Close()
+	stderr := &codexStderr{}
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return usageSnapshot{}, fmt.Errorf("start codex CLI: %w", err)
 	}
+	readCtx, stopRead := context.WithCancel(ctx)
+	readerDone := make(chan struct{})
+	stage := "initialize"
 	defer func() {
+		// EOF lets the native server shut down and its npm parent reap it.
 		_ = stdin.Close()
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		stopRead()
+		waited := make(chan error, 1)
+		go func() {
+			<-readerDone
+			waited <- cmd.Wait()
+		}()
+		timer := time.NewTimer(processGrace)
+		defer timer.Stop()
+		var waitErr error
+		select {
+		case waitErr = <-waited:
+		case <-timer.C:
+			_ = killCodexGroup(cmd)
+			_ = stdout.Close()
+			waitErr = <-waited
+		}
+		if probeErr != nil {
+			probeErr = codexFailure("codex "+stage, probeErr, waitErr, stderr)
+		}
 	}()
-
 	lines := make(chan []byte)
 	readErr := make(chan error, 1)
 	go func() {
+		defer close(readerDone)
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
 		for scanner.Scan() {
 			line := append([]byte(nil), scanner.Bytes()...)
 			select {
 			case lines <- line:
-			case <-ctx.Done():
-				return
+			case <-readCtx.Done():
+				// Drain remaining output while the server shuts down.
 			}
 		}
 		if err := scanner.Err(); err != nil {
@@ -175,9 +196,11 @@ func probeUsage(ctx context.Context, binary, codexHome string) (usageSnapshot, e
 	if _, err := read(1); err != nil {
 		return usageSnapshot{}, err
 	}
+	stage = "initialized"
 	if err := write(map[string]any{"method": "initialized", "params": map[string]any{}}); err != nil {
 		return usageSnapshot{}, err
 	}
+	stage = "account/rateLimits/read"
 	if err := write(map[string]any{"method": "account/rateLimits/read", "id": 2,
 		"params": map[string]bool{"excludeResetCreditDetails": true}}); err != nil {
 		return usageSnapshot{}, err

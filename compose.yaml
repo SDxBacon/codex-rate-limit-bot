@@ -2,6 +2,7 @@ services:
   codex-ratelimite-bot:
     build: .
     platform: linux/arm64
+    init: true
     restart: unless-stopped
     user: "${HOST_UID:?Set HOST_UID in .env}:${HOST_GID:?Set HOST_GID in .env}"
     environment:

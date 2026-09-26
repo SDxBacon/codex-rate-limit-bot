@@ -62,6 +62,22 @@ Discord 訊息以帳號為卡片，狀態在上方，兩種額度的進度條和
 
 某帳號查詢失敗時，該帳號保留上次成功資料並顯示失敗，5小時計時器暫列「狀態未知」；從未成功時顯示無用量資料。Discord 更新暫時失敗時，程式不會直接另發一則訊息。若所有帳號內容超過 Discord 單則訊息 2,000 字元限制，程式會記錄錯誤並保留原訊息。錯誤會記錄於容器日誌，憑證及 token 不會記錄。
 
+## 長時間執行與程序回收
+
+Compose 必須保留 `init: true`，由容器 init 回收孤兒子程序。npm 版 Codex CLI 會啟動原生子程序；若只強制終止外層啟動器、又沒有 init，退出的子程序可能累積成 `Z`（殭屍）程序，最後使新的查詢出現 `codex app-server closed: EOF` 或 `Resource temporarily unavailable (os error 11)`。
+
+bot 查完用量後會關閉 stdin，給 app-server 一秒正常退出及回收子程序。查詢／hello 取消或逾時時會終止其程序群組，避免留下仍在執行的子程序。查詢失敗會記錄階段、程序退出結果，以及從最多 4 KiB stderr 尾端辨識的固定錯誤類別；原始 stderr 不會寫入日誌，以免帶出憑證或帳號資料。
+
+更新程式及 Compose 設定後，必須重建容器才能套用 init；單純 `restart` 不會套用新設定：
+
+```sh
+docker compose up -d --build --force-recreate codex-ratelimite-bot
+docker compose logs --tail=50 codex-ratelimite-bot
+docker stats --no-stream
+```
+
+使用舊版 Compose 指令的主機，將 `docker compose` 改為 `docker-compose`。重建會清除舊容器累積的殭屍程序，掛載的帳號資料與 `data/state.json` 會保留。觀察數次五分鐘輪詢後的 PIDS，應回落而非持續累積；查詢執行中短暫升高屬正常。
+
 ## 本機檢查
 
 執行 `go test ./...` 檢查程式。若要在開發機直接執行，先準備 `config/config.json` 和已登入的帳號目錄，再從專案根目錄執行：
