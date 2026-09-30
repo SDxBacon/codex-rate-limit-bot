@@ -27,6 +27,9 @@ func TestProvidersShareHelloLifecycleAndCooldown(t *testing.T) {
 						t.Fatal("probe deadline")
 					}
 					s := testSnapshot(0, 10, now.Add(timerWindow).Unix())
+					if kind == accountClaude && reads != 2 {
+						s = testClaudeIdleSnapshot(10)
+					}
 					if reads == 2 {
 						if publishes != 0 {
 							t.Fatal("publication delayed recheck")
@@ -62,7 +65,7 @@ func TestProvidersShareHelloLifecycleAndCooldown(t *testing.T) {
 					t.Fatalf("lifecycle failed: %+v", got)
 				}
 				wantTimer := timerUnknown
-				if outcome == "active" {
+				if outcome == "active" || (kind == accountClaude && (outcome == "zero" || outcome == "hello failure")) {
 					wantTimer = timerActive
 				}
 				if got.Timer != wantTimer || got.Failed != (outcome == "recheck failure") {
@@ -80,8 +83,8 @@ func TestProvidersShareHelloLifecycleAndCooldown(t *testing.T) {
 	}
 }
 
-func TestProvidersRejectIncompleteAndNonIdleHelloEvidence(t *testing.T) {
-	for _, kind := range []string{accountCodex, accountClaude} {
+func TestCodexRejectsIncompleteAndNonIdleHelloEvidence(t *testing.T) {
+	for _, kind := range []string{accountCodex} {
 		for _, name := range []string{"weekly missing", "weekly full", "reset missing", "reset expired", "percent missing", "fixed zero", "used", "cross reset", "short interval"} {
 			t.Run(kind+"/"+name, func(t *testing.T) {
 				root := t.TempDir()
@@ -136,6 +139,9 @@ func TestProductionProvidersDefaultHelloLifecycle(t *testing.T) {
 			reads, sent := 0, 0
 			provider.Probe = func(context.Context, string, string) (usageSnapshot, error) {
 				reads++
+				if kind == accountClaude {
+					return testClaudeIdleSnapshot(10), nil
+				}
 				return testSnapshot(0, 10, base.Add(timerWindow+5*time.Minute).Unix()), nil
 			}
 			hello := func(context.Context, string, string) error { sent++; return nil }

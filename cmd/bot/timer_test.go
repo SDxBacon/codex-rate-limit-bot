@@ -12,7 +12,7 @@ func testSnapshot(used, weekly int, reset int64) usageSnapshot {
 	return usageSnapshot{FiveHour: newUsageWindow(float64(used), reset), Weekly: newUsageWindow(float64(weekly), reset+7*24*3600)}
 }
 
-func TestClassifyTimer(t *testing.T) {
+func TestClassifyCodexTimer(t *testing.T) {
 	base := time.Unix(1900000000, 0)
 	oldRolling := testSnapshot(0, 10, base.Add(timerWindow).Unix())
 	oldActive := testSnapshot(5, 10, base.Add(timerWindow).Unix())
@@ -39,7 +39,7 @@ func TestClassifyTimer(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := classifyTimer(tc.old, base, tc.new, tc.at); got != tc.want {
+			if got := classifyCodexTimer(tc.old, base, tc.new, tc.at); got != tc.want {
 				t.Fatalf("got %v, want %v", got, tc.want)
 			}
 		})

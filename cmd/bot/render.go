@@ -83,6 +83,9 @@ func renderAccount(name string, state accountState, now time.Time) string {
 	footer := fmt.Sprintf("<t:%d:R> 更新", state.LastSuccess.Unix())
 	if state.Type == accountClaude {
 		status = "🟡 **CLI 回報** · " + timerLabel(state.Timer)
+		if state.Timer == timerInactive {
+			status = "🟡 **CLI 回報** · 5小時計時器未啟動"
+		}
 		footer = fmt.Sprintf("<t:%d:R> 查詢 · 額度可能為快取", state.LastSuccess.Unix())
 	}
 	if state.Failed {
@@ -119,6 +122,8 @@ func renderWindow(window usageWindow, resetStyle string, stale bool) string {
 	reset := "重設時間未知"
 	if window.ResetsAt != nil {
 		reset = resetAtLabel(*window.ResetsAt, resetStyle)
+	} else if window.ResetNotStarted && window.UsedPercent != nil && *window.UsedPercent == 0 {
+		reset = "計時器未啟動"
 	}
 	return percent + " · " + reset
 }

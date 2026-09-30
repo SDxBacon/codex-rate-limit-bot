@@ -1,6 +1,6 @@
 # codex-ratelimite-bot
 
-在私人 Discord 文字頻道維護一則 Codex／Claude 帳號額度訊息。百分比和進度條表示**剩餘量**（100% 減去已用百分比）。程式每五分鐘依 `config/config.json` 的帳號順序，逐一以各帳號的 CLI 讀取整體 5 小時及每週額度，並編輯同一則訊息。各帳號的失敗狀態和上次取得資料互不影響。Codex 透過 `codex app-server --stdio` 查詢；Claude 透過 stream-json 的 `initialize`、`get_usage` 查詢。兩者共用 timer、hello 條件、冷卻、送後重新查詢及顯示流程。Codex 與 Claude 預設皆監控 usage，並在相同條件下自動送 hello，沒有 provider 專屬啟用開關。一般額度查詢不送模型提示；Claude 額度可能來自快取，卡片保留提示。本次 Claude hello 變更尚未完成真實訂閱驗收，仍留在本機，不可部署。
+在私人 Discord 文字頻道維護一則 Codex／Claude 帳號額度訊息。百分比和進度條表示**剩餘量**（100% 減去已用百分比）。程式每五分鐘依 `config/config.json` 的帳號順序，逐一以各帳號的 CLI 讀取整體 5 小時及每週額度，並編輯同一則訊息。各帳號的失敗狀態和上次取得資料互不影響。Codex 透過 `codex app-server --stdio` 查詢；Claude 透過 stream-json 的 `initialize`、`get_usage` 查詢。兩者各自判斷 timer 與 hello 資格，共用五小時冷卻、送後重新查詢及訊息更新流程。Codex 與 Claude 預設皆監控 usage，並依各自規則自動送 hello，沒有 provider 專屬啟用開關。一般額度查詢不送模型提示；Claude 額度可能來自快取，卡片保留提示。本次 Claude hello 變更尚未完成真實訂閱驗收，仍留在本機，不可部署。
 
 ## Raspberry Pi 部署
 
@@ -61,15 +61,15 @@ Linux 的 credential 檔位於該目錄的 `.credentials.json`，由 CLI 維護�
 
 Claude 查詢使用臨時工作目錄、safe mode、停用工具與 MCP，期限 30 秒；只送 `initialize` 與帶 `skip_behaviors: true` 的 `get_usage`。子程序環境移除 API key、OAuth token、provider 與 credential 路徑覆蓋，確保以指定目錄的登入為準。CLI 自動更新、遙測及錯誤回報關閉；不設定 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`，因它可能阻止額度端點查詢。
 
-Claude 回應只使用 `five_hour` 與 `seven_day`，忽略模型專屬額度與額外付費。至少一個視窗有有效百分比才更新快照；百分比顯示最多一位小數，整數不加 `.0`，進度條使用未四捨五入的值。缺省百分比顯示 `—`、缺省 reset 顯示「重設時間未知」，不當作 0% 或 100%。非 null 的非法型別、數值或時間會使本次查詢失敗，保留上次快照並於下一輪再試。
+Claude 回應只使用 `rate_limits.five_hour` 與 `rate_limits.seven_day`，不解析 `limits[].is_active`、模型專屬額度或額外付費。至少一個視窗有有效百分比才更新快照；百分比顯示最多一位小數，整數不加 `.0`，進度條使用未四捨五入的值。明確的 `resets_at: null` 與欄位缺省分開保存：0% 且 reset 明確為 null 時顯示「計時器未啟動」；缺省百分比顯示 `—`、缺省 reset 顯示「重設時間未知」。非 null 的非法型別、數值或時間會使本次查詢失敗，保留上次快照並於下一輪再試。
 
-`get_usage` 不提供資料來源或新鮮度資訊，成功回應仍可能是快取。Claude 卡片因此顯示「CLI 回報」、「額度可能為快取」與**查詢時間**，不宣稱該時間是伺服器額度的更新時間。Claude 與 Codex 共用 timer 判斷及 hello 條件；0% 本身、null reset、過期 reset 都不是未啟動的充分證據。符合兩筆有效滾動樣本、weekly 未滿與冷卻條件才送 hello。只有查詢失敗時才使用上次快照並加上 `＊`；快取提示適用於每次 Claude 回報。
+`get_usage` 的兩個直接額度視窗不提供資料新鮮度資訊，成功回應仍可能是快取。Claude 卡片因此顯示「CLI 回報」、「額度可能為快取」與**查詢時間**，不宣稱該時間是伺服器額度的更新時間。Claude 獨立判斷 timer：5 小時視窗 0% 且 reset 明確為 null 是未啟動；有有效百分比及未來 reset 是運作中，即使百分比為 0%；缺省百分比、缺省 reset、過期 reset 或非零用量搭配 null 則是未知。Claude 未啟動、weekly 百分比已知且未滿、冷卻已過時便送 hello，不需要 Codex 的兩筆滾動樣本。送後以新讀值獨立判斷：null 仍是未啟動，未來時間是運作中。只有查詢失敗時才使用上次快照並加上 `＊`；快取提示適用於每次 Claude 回報。
 
 日誌中的 `usage_unavailable` 表示 CLI 沒有提供可用額度，不表示閒置或 100% 剩餘。請先用相同目錄檢查 `auth status`，必要時重新登入；控制錯誤的 401／403／429、逾時、EOF、CLI 不存在及目錄無法寫入會以固定分類記錄，不輸出原始控制錯誤或 stderr。模型／effort 選項的獨立查詢仍放在 [PoC 文件](poc/README.md)，Claude hello 預設 Sonnet／low，可在帳號指定 `hello_model`、`hello_effort`；模型必須是非空字串，effort 接受 `low`、`medium`、`high`、`xhigh`、`max`，省略為 `low`，`null` 表示不傳 effort 旗標。這兩個欄位只適用於 Claude 帳號；非法熱更新不取代有效設定。
 
 ## 更新與狀態
 
-使用量每五分鐘查詢一次。`data/state.json` 只保存 Discord 訊息 ID；用量、timer 判定和 `hello` 嘗試時間只保存在記憶體。升級時，舊狀態檔中的用量欄位會移除，但原 Discord 訊息 ID 會沿用。Codex 及 Claude 重啟後首筆 0% 讀值會顯示「5小時計時器狀態未知」，下一筆確認仍滾動時可能再次送出 `hello`。
+使用量每五分鐘查詢一次。`data/state.json` 只保存 Discord 訊息 ID；用量、timer 判定和 `hello` 嘗試時間只保存在記憶體。升級時，舊狀態檔中的用量欄位會移除，但原 Discord 訊息 ID 會沿用。Codex 重啟後首筆 0% 讀值會顯示「5小時計時器狀態未知」，下一筆確認仍滾動時可能再次送出 `hello`。Claude 重啟後首筆 0% 且 reset 明確為 null 即可判定未啟動，weekly 未滿時可能立即送 hello；重啟會清除記憶體中的冷卻紀錄。
 
 Discord 訊息以帳號為卡片，狀態在上方，兩種額度的進度條和百分比都表示**剩餘量**。例如：
 
@@ -97,7 +97,9 @@ Discord 訊息以帳號為卡片，狀態在上方，兩種額度的進度條和
 
 範例數值僅供排版參考；實際時間使用 Discord 動態時間格式。每週重設時間距離超過 24 小時或已過期時，括號外顯示短日期（`:d`）；進入重設前 24 小時後，改顯示短時間（`:t`）。括號內一直使用相對時間（`:R`），樣式會在下一次五分鐘更新時切換。首次讀取前會顯示 ⚪「等待首次讀取」；失敗且沒有舊資料時顯示 `—`。有 hello 嘗試紀錄時，卡片下方會另顯示「Bot 嘗試 hello」及時間，這不代表計時器已成功啟動。
 
-共用的 5-hour reset timer 有 `Active`、`Inactive (rolling)` 和 `Unknown` 三態，訊息分別顯示「5小時計時器運作中」、「5小時計時器未啟動（重設時間滾動）」和「5小時計時器狀態未知」。只有兩筆間隔至少三分鐘、少於五小時且屬於同一週期的 0% 讀值顯示等量後移時，才判定為 `Inactive (rolling)`。bot 僅在這個狀態、weekly 未達 100%，且本次執行近五小時未嘗試過時送出 `hello`。Codex 每次嘗試使用該帳號的 `CODEX_HOME`、`gpt-6-luna`、low effort、唯讀 sandbox 和臨時 session。Claude 使用該帳號的 `CLAUDE_CONFIG_DIR` 與 hello 設定，停用工具與 MCP、不保存 session；先確認 `get_settings.applied` 的模型與指定 effort，再送一次 `hello`，成功 terminal result 才視為成功。兩者最多執行 90 秒，不論成功或失敗，皆立即以獨立 30 秒期限再查用量；失敗仍保留五小時冷卻。缺少必要的 5 小時百分比／reset 或 weekly 百分比不送 hello，送後缺值不判定啟動。訊息上的「Bot 嘗試 hello」時間只代表 bot 的嘗試，無法判定由誰啟動 timer。帳號 type 或完整 home 路徑改變時，用量、timer 與 hello 記錄均清除並重新建立；僅改模型／effort 保留冷卻。
+Codex 的 5-hour reset timer 有 `Active`、`Inactive (rolling)` 和 `Unknown` 三態，訊息分別顯示「5小時計時器運作中」、「5小時計時器未啟動（重設時間滾動）」和「5小時計時器狀態未知」。只有兩筆間隔至少三分鐘、少於五小時且屬於同一週期的 0% 讀值顯示等量後移時，才判定為 `Inactive (rolling)`。Claude 使用上述 null reset 規則，未啟動時顯示「5小時計時器未啟動」，不套用滾動時間比較。bot 在各自的未啟動狀態、weekly 百分比已知且未達 100%，且本次執行近五小時未嘗試過時送出 `hello`。
+
+Codex 每次嘗試使用該帳號的 `CODEX_HOME`、`gpt-6-luna`、low effort、唯讀 sandbox 和臨時 session。Claude 使用該帳號的 `CLAUDE_CONFIG_DIR` 與 hello 設定，停用工具與 MCP、不保存 session；先確認 `get_settings.applied` 的模型與指定 effort，再送一次 `hello`，成功 terminal result 才視為成功。兩者最多執行 90 秒，不論成功或失敗，皆立即以獨立 30 秒期限再查用量；失敗仍保留五小時冷卻。Codex 必須有 5 小時百分比／reset；Claude 必須有 0% 和明確 null reset，缺省欄位不等同 null。兩者缺少 weekly 百分比都不送 hello。訊息上的「Bot 嘗試 hello」時間只代表 bot 的嘗試，無法判定由誰啟動 timer。帳號 type 或完整 home 路徑改變時，用量、timer 與 hello 記錄均清除並重新建立；僅改模型／effort 保留冷卻。
 
 從舊版 `codex-monitor` 服務升級時，先執行 `docker compose down --remove-orphans`，再執行 `docker compose up -d --build`，避免兩個服務同時更新訊息。
 

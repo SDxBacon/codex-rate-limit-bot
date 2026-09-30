@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,8 +15,8 @@ import (
 )
 
 type claudeRateWindow struct {
-	Utilization *float64 `json:"utilization"`
-	ResetsAt    *string  `json:"resets_at"`
+	Utilization *float64        `json:"utilization"`
+	ResetsAt    json.RawMessage `json:"resets_at"`
 }
 
 func parseClaudeUsage(raw json.RawMessage) (usageSnapshot, error) {
@@ -41,8 +42,14 @@ func parseClaudeUsage(raw json.RawMessage) (usageSnapshot, error) {
 			*w.Utilization < 0 || *w.Utilization > 100) {
 			return usageWindow{}, errors.New("invalid_utilization")
 		}
-		if w.ResetsAt != nil {
-			at, err := time.Parse(time.RFC3339Nano, *w.ResetsAt)
+		if bytes.Equal(bytes.TrimSpace(w.ResetsAt), []byte("null")) {
+			window.ResetNotStarted = true
+		} else if len(w.ResetsAt) != 0 {
+			var timestamp string
+			if err := json.Unmarshal(w.ResetsAt, &timestamp); err != nil {
+				return usageWindow{}, errors.New("invalid_usage_json")
+			}
+			at, err := time.Parse(time.RFC3339Nano, timestamp)
 			if err != nil || at.Unix() <= 0 {
 				return usageWindow{}, errors.New("invalid_reset_timestamp")
 			}
@@ -63,6 +70,25 @@ func parseClaudeUsage(raw json.RawMessage) (usageSnapshot, error) {
 		return usageSnapshot{}, errors.New("usage_unavailable")
 	}
 	return usageSnapshot{FiveHour: five, Weekly: week}, nil
+}
+
+// Claude reports an unstarted window with an explicit null reset. A future
+// reset means its window is active, even when utilization rounds to zero.
+func classifyClaudeTimer(current usageSnapshot, at time.Time) timerStatus {
+	window := current.FiveHour
+	if window.UsedPercent == nil {
+		return timerUnknown
+	}
+	if window.ResetsAt != nil {
+		if at.Before(time.Unix(*window.ResetsAt, 0)) {
+			return timerActive
+		}
+		return timerUnknown
+	}
+	if window.ResetNotStarted && *window.UsedPercent == 0 {
+		return timerInactive
+	}
+	return timerUnknown
 }
 
 func claudeEnvironment(home string) []string {

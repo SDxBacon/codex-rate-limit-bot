@@ -1,9 +1,11 @@
 package main
 
-// nil means unavailable, never zero utilization or an epoch-zero reset.
+// Percent and timestamp pointers preserve unavailable values. Claude's explicit
+// null reset is recorded separately from a missing reset field.
 type usageWindow struct {
-	UsedPercent *float64 `json:"used_percent"`
-	ResetsAt    *int64   `json:"resets_at"`
+	UsedPercent     *float64 `json:"used_percent"`
+	ResetsAt        *int64   `json:"resets_at"`
+	ResetNotStarted bool     `json:"reset_not_started,omitempty"`
 }
 
 type usageSnapshot struct {

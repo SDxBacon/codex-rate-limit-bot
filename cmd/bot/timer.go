@@ -30,7 +30,7 @@ func near(a, b time.Duration) bool {
 	return a >= b-timerTolerance && a <= b+timerTolerance
 }
 
-func classifyTimer(previous *usageSnapshot, previousAt time.Time, current usageSnapshot, currentAt time.Time) timerStatus {
+func classifyCodexTimer(previous *usageSnapshot, previousAt time.Time, current usageSnapshot, currentAt time.Time) timerStatus {
 	if current.FiveHour.UsedPercent == nil || current.FiveHour.ResetsAt == nil {
 		return timerUnknown
 	}
@@ -72,7 +72,11 @@ func classifyTimer(previous *usageSnapshot, previousAt time.Time, current usageS
 
 func (state *accountState) recordUsage(snapshot usageSnapshot, at time.Time) {
 	state.expireHello(at)
-	state.Timer = classifyTimer(state.LastUsage, state.LastSuccess, snapshot, at)
+	if state.Type == accountClaude {
+		state.Timer = classifyClaudeTimer(snapshot, at)
+	} else {
+		state.Timer = classifyCodexTimer(state.LastUsage, state.LastSuccess, snapshot, at)
+	}
 	state.LastUsage = &snapshot
 	state.LastSuccess = at
 	state.Failed = false
@@ -87,9 +91,14 @@ func (state *accountState) expireHello(at time.Time) {
 }
 
 func (state *accountState) shouldSendHello(now time.Time) bool {
-	return state.Timer == timerInactive && state.LastUsage != nil && !state.Failed &&
-		state.LastUsage.FiveHour.UsedPercent != nil && state.LastUsage.FiveHour.ResetsAt != nil &&
-		now.Before(time.Unix(*state.LastUsage.FiveHour.ResetsAt, 0)) &&
-		state.LastUsage.Weekly.UsedPercent != nil && *state.LastUsage.Weekly.UsedPercent < 100 &&
-		(state.LastAttempt.IsZero() || now.Sub(state.LastAttempt) >= timerWindow)
+	if state.Timer != timerInactive || state.LastUsage == nil || state.Failed ||
+		state.LastUsage.Weekly.UsedPercent == nil || *state.LastUsage.Weekly.UsedPercent >= 100 ||
+		(!state.LastAttempt.IsZero() && now.Sub(state.LastAttempt) < timerWindow) {
+		return false
+	}
+	if state.Type == accountClaude {
+		return classifyClaudeTimer(*state.LastUsage, now) == timerInactive
+	}
+	return state.LastUsage.FiveHour.UsedPercent != nil && state.LastUsage.FiveHour.ResetsAt != nil &&
+		now.Before(time.Unix(*state.LastUsage.FiveHour.ResetsAt, 0))
 }

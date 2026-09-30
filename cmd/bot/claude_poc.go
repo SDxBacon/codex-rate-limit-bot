@@ -59,7 +59,7 @@ type claudePOCReport struct {
 }
 
 // This is an experiment conclusion, not a freshness interface for production.
-// Require a naturally expired window, rolling idle samples, a successful manual
+// Require a naturally expired window, explicit null-reset idle samples, a successful manual
 // hello, then two fresh fixed-reset observations near a new five-hour window.
 func analyzeClaudePOC(report claudePOCReport) claudePOCVerdict {
 	unknown := func(reason string) claudePOCVerdict { return claudePOCVerdict{"unknown", reason} }
@@ -73,7 +73,8 @@ func analyzeClaudePOC(report claudePOCReport) claudePOCVerdict {
 			(report.Hello != nil && !b.At.Before(report.Hello.At)) {
 			continue
 		}
-		if classifyTimer(&a.Usage, a.At, b.Usage, b.At) != timerInactive {
+		if classifyClaudeTimer(a.Usage, a.At) != timerInactive ||
+			classifyClaudeTimer(b.Usage, b.At) != timerInactive {
 			continue
 		}
 		for _, earlier := range report.Samples[:i-1] {
@@ -81,14 +82,7 @@ func analyzeClaudePOC(report claudePOCReport) claudePOCVerdict {
 				earlier.Usage.FiveHour.UsedPercent != nil &&
 				earlier.At.Before(time.Unix(*earlier.Usage.FiveHour.ResetsAt, 0)) &&
 				!a.At.Before(time.Unix(*earlier.Usage.FiveHour.ResetsAt, 0)) {
-				wasRunning := *earlier.Usage.FiveHour.UsedPercent > 0
-				for _, prior := range report.Samples[:i-1] {
-					if prior.endpointConfirmed() && prior.At.Before(earlier.At) &&
-						classifyTimer(&prior.Usage, prior.At, earlier.Usage, earlier.At) == timerActive {
-						wasRunning = true
-					}
-				}
-				if !wasRunning {
+				if classifyClaudeTimer(earlier.Usage, earlier.At) != timerActive {
 					continue
 				}
 				copy := b
@@ -98,7 +92,7 @@ func analyzeClaudePOC(report claudePOCReport) claudePOCVerdict {
 		}
 	}
 	if idle == nil {
-		return unknown("expired_window_and_fresh_rolling_idle_samples_required")
+		return unknown("expired_window_and_fresh_null_reset_idle_samples_required")
 	}
 	if report.Hello == nil {
 		return unknown("manual_hello_required")
@@ -122,8 +116,8 @@ func analyzeClaudePOC(report claudePOCReport) claudePOCVerdict {
 		elapsed := b.At.Sub(a.At)
 		if elapsed >= minimumComparison && elapsed < timerWindow && b.At.Before(reset) && near(delta, 0) &&
 			!near(delta, elapsed) && near(reset.Sub(report.Hello.At), timerWindow) &&
-			classifyTimer(&a.Usage, a.At, b.Usage, b.At) == timerActive {
-			return claudePOCVerdict{"validated", "fresh_expired_to_rolling_to_hello_to_fixed_window_observed"}
+			classifyClaudeTimer(a.Usage, a.At) == timerActive && classifyClaudeTimer(b.Usage, b.At) == timerActive {
+			return claudePOCVerdict{"validated", "fresh_expired_to_null_reset_to_hello_to_fixed_window_observed"}
 		}
 	}
 	return unknown("fresh_fixed_new_window_samples_after_hello_required")

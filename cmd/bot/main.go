@@ -64,7 +64,10 @@ func probeAccounts(ctx context.Context, accounts []accountConfig, root string, s
 		attemptAt := now().UTC()
 		state.LastAttempt = attemptAt
 		state.HelloAt = attemptAt
-		state.HelloReset = *snapshot.FiveHour.ResetsAt
+		state.HelloReset = 0
+		if snapshot.FiveHour.ResetsAt != nil {
+			state.HelloReset = *snapshot.FiveHour.ResetsAt
+		}
 		state.Timer = timerUnknown
 		states[account.ID] = state
 		helloCtx, helloCancel := context.WithTimeout(ctx, helloTimeout)
@@ -84,7 +87,11 @@ func probeAccounts(ctx context.Context, accounts []accountConfig, root string, s
 		} else {
 			recheckAt := now().UTC()
 			state.recordUsage(recheck, recheckAt)
-			if recheck.FiveHour.UsedPercent == nil || recheck.FiveHour.ResetsAt == nil || snapshot.FiveHour.ResetsAt == nil ||
+			if kind == accountClaude {
+				if state.Timer == timerActive {
+					state.HelloReset = *recheck.FiveHour.ResetsAt
+				}
+			} else if recheck.FiveHour.UsedPercent == nil || recheck.FiveHour.ResetsAt == nil || snapshot.FiveHour.ResetsAt == nil ||
 				*recheck.FiveHour.UsedPercent == 0 {
 				state.Timer = timerUnknown
 			} else {

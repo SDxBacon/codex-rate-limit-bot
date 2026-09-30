@@ -19,8 +19,8 @@ func validatedClaudeExperiment() claudePOCReport {
 		Hello: &claudePOCHello{At: helloAt, CompletedAt: helloAt.Add(time.Second), Model: "sonnet", Effort: &effort},
 		Samples: []claudePOCObservation{
 			{At: base, Usage: testSnapshot(1, 10, base.Add(time.Minute).Unix()), Diagnostics: fresh},
-			{At: base.Add(5 * time.Minute), Usage: testSnapshot(0, 10, base.Add(5*time.Minute+timerWindow).Unix()), Diagnostics: fresh},
-			{At: base.Add(10 * time.Minute), Usage: testSnapshot(0, 10, base.Add(10*time.Minute+timerWindow).Unix()), Diagnostics: fresh},
+			{At: base.Add(5 * time.Minute), Usage: testClaudeIdleSnapshot(10), Diagnostics: fresh},
+			{At: base.Add(10 * time.Minute), Usage: testClaudeIdleSnapshot(10), Diagnostics: fresh},
 			{At: helloAt.Add(2 * time.Second), Usage: testSnapshot(0, 10, helloAt.Add(timerWindow).Unix()), Diagnostics: fresh},
 			{At: helloAt.Add(5*time.Minute + 2*time.Second), Usage: testSnapshot(0, 10, helloAt.Add(timerWindow).Unix()), Diagnostics: fresh},
 		},
@@ -31,7 +31,7 @@ func TestClaudeExperimentRequiresRealTransitionEvidence(t *testing.T) {
 	if got := analyzeClaudePOC(validatedClaudeExperiment()); got.Status != "validated" {
 		t.Fatal(got)
 	}
-	for _, name := range []string{"wrong platform", "root", "no expiry", "no active window", "cached before", "cached after", "endpoint failed", "null reset", "no rolling", "no hello", "failed hello", "unsupported effort", "still rolling", "short followup", "old post reset"} {
+	for _, name := range []string{"wrong platform", "root", "no expiry", "no active window", "cached before", "cached after", "endpoint failed", "missing reset", "non-null idle reset", "no hello", "failed hello", "unsupported effort", "still rolling", "short followup", "old post reset"} {
 		t.Run(name, func(t *testing.T) {
 			r := validatedClaudeExperiment()
 			switch name {
@@ -42,17 +42,17 @@ func TestClaudeExperimentRequiresRealTransitionEvidence(t *testing.T) {
 			case "no expiry":
 				r.Samples = r.Samples[1:]
 			case "no active window":
-				r.Samples[0].Usage.FiveHour.UsedPercent = newUsageWindow(0, 1).UsedPercent
+				r.Samples[0].Usage.FiveHour.UsedPercent = nil
 			case "cached before":
 				r.Samples[1].Diagnostics.CacheHit = true
 			case "cached after":
 				r.Samples[4].Diagnostics.EndpointSuccesses = 0
 			case "endpoint failed":
 				r.Samples[4].Diagnostics.FetchFailed = true
-			case "null reset":
-				r.Samples[2].Usage.FiveHour.ResetsAt = nil
-			case "no rolling":
-				r.Samples[2].Usage.FiveHour.ResetsAt = r.Samples[1].Usage.FiveHour.ResetsAt
+			case "missing reset":
+				r.Samples[2].Usage.FiveHour.ResetNotStarted = false
+			case "non-null idle reset":
+				r.Samples[2].Usage.FiveHour = newUsageWindow(0, r.Samples[2].At.Add(timerWindow).Unix())
 			case "no hello":
 				r.Hello = nil
 			case "failed hello":

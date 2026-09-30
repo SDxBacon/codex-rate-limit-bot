@@ -169,8 +169,7 @@ func TestDefaultClaudePollingSendsHelloAndRechecks(t *testing.T) {
 	trace := filepath.Join(dir, "trace")
 	t.Setenv("TRACE_FILE", trace)
 	base := time.Unix(1900000000, 0)
-	reset := base.Add(timerWindow + 5*time.Minute)
-	usage := `{"rate_limits_available":true,"rate_limits":{"five_hour":{"utilization":0,"resets_at":"` + reset.UTC().Format(time.RFC3339) + `"},"seven_day":{"utilization":10,"resets_at":null}}}`
+	usage := `{"rate_limits_available":true,"rate_limits":{"five_hour":{"utilization":0,"resets_at":null},"seven_day":{"utilization":10,"resets_at":null}}}`
 	bin := fakeClaude(t, `read init
 printf '%s\n' "$init" >> "$TRACE_FILE"
 printf '%s\n' '`+claudeResponse("1", helloInit)+`'
@@ -190,8 +189,7 @@ case "$request" in
 esac
 while read extra; do printf 'unexpected extra\n' >> "$TRACE_FILE"; done
 `)
-	old := testSnapshot(0, 10, base.Add(timerWindow).Unix())
-	states := map[string]accountState{"one": {Type: accountClaude, Home: filepath.Join(dir, "one"), LastUsage: &old, LastSuccess: base}}
+	states := make(map[string]accountState)
 	providers := makeProviders("unused-codex", bin)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
