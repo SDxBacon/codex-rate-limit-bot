@@ -1,12 +1,12 @@
 # 交接文件：支援 Claude CLI
 
-狀態日期：2026-09-30。已實作第一版 Go 混合帳號監控、type 設定、Discord 呈現及固定 CLI 版本的 Docker 定義；尚未部署，ARM64 容器與測試頻道驗收未完成。
+狀態日期：2026-09-30。使用者已部署監控版至 Pi。現已加入 Claude hello、共用 timer／冷卻／送後查詢、每帳號模型與 effort 設定，以及正式映像可執行的 Go timer PoC。兩個 provider 預設皆提供 Probe 與 Hello，沒有 Claude 專屬啟用開關。真實 timer 與測試頻道驗收尚未完成；本次未提交或部署。
 
 ## 1. 目前目標
 
 將這個以 Go 開發的 Codex 額度監控 bot 擴充為同時支援 Codex 與 Claude Code CLI 帳號。目前 bot 每五分鐘輪詢一次，在同一則 Discord 訊息顯示各帳號的 5 小時與每週剩餘額度、重設時間及狀態。對 Codex，當觀測顯示 5 小時計時器未啟動時，也會送出簡短的 `hello`。
 
-Claude 第一版只監控並標示資料可能為快取，計時器固定未知、不自動 hello。自動 hello 留待後續驗證與版本。
+目前目標是 Claude 與 Codex 完整對齊查詢、timer、hello、冷卻及送後重新查詢。Claude 與 Codex 預設使用相同的 timer／hello 流程；真實驗證屬於發布驗收，未通過前將變更保留本機，不用執行期開關代替完成驗證。
 
 已討論確定的方向：
 
@@ -14,7 +14,7 @@ Claude 第一版只監控並標示資料可能為快取，計時器固定未知�
 - 部署目標為 Raspberry Pi／Linux ARM64 容器，各帳號使用獨立目錄；Claude 透過 `CLAUDE_CONFIG_DIR` 指定。
 - 第一版以 Claude Pro／Max 的整體 5 小時與每週額度為主，不納入各模型專屬額度及額外付費資訊。
 - 優先使用 CLI 的實驗性 `get_usage` 控制介面，讓 CLI 管理登入。可以依賴內部介面，但必須先驗證行為。
-- 第一版不加入 Claude hello 模型／effort 設定；選項查詢保留在 PoC，未來需驗證閒置轉換後再定案。
+- Claude 帳號新增 hello_model（預設 sonnet）與 hello_effort（預設 low，null 表示不指定）；CLI 必須實際套用指定值。選項查詢繼續保留在 PoC。
 
 使用者明確要求先寫可執行的 PoC，不能僅根據文件或推測就認定方案可以實作。
 
@@ -39,7 +39,7 @@ Claude 第一版只監控並標示資料可能為快取，計時器固定未知�
 - 已成功送出的 hello 並未證明能啟動新的 5 小時視窗。effort 驗證到 CLI 實際套用設定，沒有攔截送往 API 的封包。
 - 十個本機測試通過，涵蓋缺值、非法資料、快取與跨 reset 的保守處理，以及帳號目錄優先順序、移除其他繼承登入來源；不代表已驗證真實閒置帳號或 token 更新。
 
-接下來應先補上閒置／視窗到期實驗，再實作自動 hello。登入憑證更新及 Linux／ARM64 執行也仍待驗證。
+閒置／視窗到期工具已實作，尚待本機隔離環境取得真實訂閱實驗報告；不能將假 CLI 成功視為真實 timer 驗證。登入憑證更新及完整 Linux／ARM64 驗收仍待確認。
 
 專案內參考資料：
 
@@ -53,8 +53,26 @@ Claude 第一版只監控並標示資料可能為快取，計時器固定未知�
 
 ## 3. Go 監控整合
 
-正式程式以帳號 type 分派查詢；省略為 codex。Claude 使用 `CLAUDE_CONFIG_DIR`、臨時工作目錄、30 秒控制請求，支援可空百分比與 reset、小數百分比及失敗保留舊資料；所有 Claude 樣本 timer 均為 unknown，不送 user frame。帳號 type／home 改變清除狀態。Discord 標題為「AI 帳號額度」，保留所有舊標題恢復能力；Claude 查詢時間及快取限制明示。
+正式程式以帳號 type 分派查詢；省略為 codex。Claude 使用 `CLAUDE_CONFIG_DIR`、臨時工作目錄、30 秒控制請求，支援可空百分比與 reset、小數百分比及失敗保留舊資料；查詢不送 user frame；timer／hello 預設與 Codex 共用規則及觸發條件。帳號 type／home 改變清除狀態。Discord 標題為「AI 帳號額度」，保留所有舊標題恢復能力；Claude 查詢時間及快取限制明示。
 
 Docker 固定安裝 Claude 2.1.284，保留原 root 掛載、非 root 使用者及 init。登入程序、測試指令與發布前驗收請見專案 README。新增假的 CLI 協定、資料、逾時、子程序回收及混合帳號測試；另有需 `CLAUDE_TEST_CONFIG_DIR` 的可選真實 Go 查詢測試。
 
-macOS 實測補充：未設定 `CLAUDE_CONFIG_DIR` 時既有 Pro 已登入；顯式指定同一個 `~/.claude` 路徑時，CLI 2.1.284 使用不同 Keychain 項目，回報未登入。Go 與既有 Python PoC 都取得 `rate_limits_available: false`，不能當成有效額度讀取。需先在專用目錄登入，尚未驗證已登入專用目錄的成功 Go 查詢。本機 Docker daemon 未啟動，ARM64 映像、Linux 真實訂閱與測試頻道三輪／重啟驗收仍待完成。沒有發布或部署。
+macOS 實測補充：未設定 `CLAUDE_CONFIG_DIR` 時既有 Pro 已登入；顯式指定同一個 `~/.claude` 路徑時，CLI 2.1.284 使用不同 Keychain 項目，回報未登入。Go 與既有 Python PoC 都取得 `rate_limits_available: false`，不能當成有效額度讀取。需先在專用目錄登入，尚未驗證已登入專用目錄的成功 Go 查詢。本次已建置正式 ARM64 映像，確認 Claude 2.1.284 以非 root 執行，並用假 CLI、UID 1000、init、無網路完成單次 hello、帳號目錄可寫及 0600 報告檢查。Linux 真實訂閱 timer 與測試頻道三輪／重啟驗收仍待完成。使用者已部署先前監控版本；本次完整流程尚未發布或部署。
+
+## 4. 完整流程與發布驗收
+
+共用 Go CLI session 支援查詢與 hello；hello 先 initialize/get_settings，模型與指定 effort 未生效就不送 user frame，僅成功 terminal result 視為成功。缺值保護、送後查詢、失敗冷卻、程序回收與 Discord hello 時間均已整合。Codex 模型與 effort 維持原值；帳號只改 hello 設定不清除冷卻。
+
+Go 執行檔的 `claude-poc` 可在同一 Dockerfile 建置的隔離候選映像執行。操作文件是 [CLAUDE_TIMER.zh-TW.md](CLAUDE_TIMER.zh-TW.md)；它驗證運作中視窗自然到期→兩次新鮮滾動樣本→一次手動 Sonnet/low hello→兩次新鮮固定新視窗，缺段就回報 unknown。debug 僅用於 PoC 診斷，原始檔刪除，報告 0600，正式程式不使用 debug 判斷新鮮度。
+
+目前未取得真實通過報告，不得宣稱已完成 timer 驗證；先在本機隔離環境完成實驗、測試頻道三輪及一次重啟，再提交發布版本。Compose 保留使用者新增的 /home/luo/.claude 掛載，讓絕對 symlink 目標在容器可見。
+
+本次驗證：全部 Go 測試、race、vet、十個 Python PoC 測試、Linux ARM64 編譯、Compose 設定與上述假 CLI 容器檢查通過。沒有執行真實 Claude hello 或 Discord 發布。
+
+## 5. 驗證與部署界線更正
+
+使用者明確禁止將尚未驗證的變更提交後 git pull 到 Pi。剩餘 timer／hello 驗證改在開發機的隔離 Linux ARM64 容器完成；poc/compose.validation.yaml 是獨立專案，沒有正式 Discord、帳號目錄或 state.json。操作文件已改為本機測試帳號登入及取樣，不需更新 Pi。測試尚缺已登入的隔離訂閱 profile；不得以假 CLI 通過或 ARM64 編譯成功宣稱真實驗證完成。本次沒有 commit、push 或 Pi 部署。
+
+## 6. 功能對齊更正
+
+使用者再次明確要求 Claude 與 Codex 預設功能一致；已移除 Claude 專屬 enable／disable 環境變數、provider readiness 回呼及 state blocked 欄位。兩個 provider 預設都有 Probe／Hello，共用 timer、冷卻及重新查詢。真實測試未完成是不能發布的原因，不再改成 Claude 執行期限制。所有未驗證變更仍留本機，未 commit、push 或部署。

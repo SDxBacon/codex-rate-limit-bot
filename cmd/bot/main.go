@@ -19,6 +19,8 @@ type accountProvider struct {
 	Binary string
 	Probe  usageProbe
 	Hello  helloRunner
+	// ConfigureHello binds per-account options without changing the Codex runner.
+	ConfigureHello func(accountConfig) helloRunner
 }
 
 func probeAccounts(ctx context.Context, accounts []accountConfig, root string, states map[string]accountState,
@@ -52,7 +54,11 @@ func probeAccounts(ctx context.Context, accounts []accountConfig, root string, s
 		readAt := now().UTC()
 		state.recordUsage(snapshot, readAt)
 		states[account.ID] = state
-		if kind != accountCodex || provider.Hello == nil || !state.shouldSendHello(readAt) {
+		hello := provider.Hello
+		if provider.ConfigureHello != nil {
+			hello = provider.ConfigureHello(account)
+		}
+		if hello == nil || !state.shouldSendHello(readAt) {
 			continue
 		}
 		attemptAt := now().UTC()
@@ -62,10 +68,10 @@ func probeAccounts(ctx context.Context, accounts []accountConfig, root string, s
 		state.Timer = timerUnknown
 		states[account.ID] = state
 		helloCtx, helloCancel := context.WithTimeout(ctx, helloTimeout)
-		err = provider.Hello(helloCtx, provider.Binary, home)
+		err = hello(helloCtx, provider.Binary, home)
 		helloCancel()
 		if err != nil {
-			log.Printf("Codex hello failed for %s: %v", account.ID, err)
+			log.Printf("%s hello failed for %s: %v", kind, account.ID, err)
 		}
 		// This read has its own deadline, regardless of how long hello took.
 		recheckCtx, recheckCancel := context.WithTimeout(ctx, probeTimeout)
@@ -73,17 +79,21 @@ func probeAccounts(ctx context.Context, accounts []accountConfig, root string, s
 		recheckCancel()
 		if err != nil {
 			state.Failed = true
-			log.Printf("Codex usage recheck failed for %s: %v", account.ID, err)
+			state.Timer = timerUnknown
+			log.Printf("%s usage recheck failed for %s: %v", kind, account.ID, err)
 		} else {
 			recheckAt := now().UTC()
-			dr := time.Duration(*recheck.FiveHour.ResetsAt-*snapshot.FiveHour.ResetsAt) * time.Second
 			state.recordUsage(recheck, recheckAt)
-			if *recheck.FiveHour.UsedPercent == 0 {
+			if recheck.FiveHour.UsedPercent == nil || recheck.FiveHour.ResetsAt == nil || snapshot.FiveHour.ResetsAt == nil ||
+				*recheck.FiveHour.UsedPercent == 0 {
 				state.Timer = timerUnknown
-			} else if state.Timer == timerUnknown &&
-				recheckAt.Before(time.Unix(*recheck.FiveHour.ResetsAt, 0)) &&
-				near(dr, 0) && !(dr >= timerTolerance && near(dr, recheckAt.Sub(readAt))) {
-				state.Timer = timerActive
+			} else {
+				dr := time.Duration(*recheck.FiveHour.ResetsAt-*snapshot.FiveHour.ResetsAt) * time.Second
+				if state.Timer == timerUnknown &&
+					recheckAt.Before(time.Unix(*recheck.FiveHour.ResetsAt, 0)) &&
+					near(dr, 0) && !(dr >= timerTolerance && near(dr, recheckAt.Sub(readAt))) {
+					state.Timer = timerActive
+				}
 			}
 		}
 		states[account.ID] = state
@@ -150,10 +160,7 @@ func run(ctx context.Context) error {
 	if claudeBinary == "" {
 		claudeBinary = "claude"
 	}
-	providers := map[string]accountProvider{
-		accountCodex:  {Binary: binary, Probe: probeUsage, Hello: sendHello},
-		accountClaude: {Binary: claudeBinary, Probe: probeClaudeUsage},
-	}
+	providers := makeProviders(binary, claudeBinary)
 	// Rewrite legacy state once, removing persisted usage while retaining the ID.
 	if err := saveState(statePath, state); err != nil {
 		return fmt.Errorf("normalize state: %w", err)
@@ -181,6 +188,15 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if len(os.Args) > 1 {
+		if os.Args[1] != "claude-poc" {
+			log.Fatal("unknown command")
+		}
+		if err := runClaudePOC(ctx, os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if err := run(ctx); err != nil {
 		log.Fatal(err)
 	}

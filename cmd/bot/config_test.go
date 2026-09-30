@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,6 +23,49 @@ func TestLoadAndReloadConfig(t *testing.T) {
 	previous, err := reloadConfig(path, config)
 	if err == nil || previous.Accounts[0].ID != "second" {
 		t.Fatalf("invalid reload should retain prior config: %+v, %v", previous, err)
+	}
+}
+
+func TestClaudeHelloConfigDefaultsOverridesAndInvalidReload(t *testing.T) {
+	for _, tc := range []struct {
+		fields, model, effort string
+		omitted               bool
+	}{
+		{``, "sonnet", "low", false},
+		{`,"hello_model":"opus","hello_effort":"max"`, "opus", "max", false},
+		{`,"hello_model":"haiku","hello_effort":null`, "haiku", "", true},
+	} {
+		var a accountConfig
+		if err := json.Unmarshal([]byte(`{"type":"claude"`+tc.fields+`}`), &a); err != nil {
+			t.Fatal(err)
+		}
+		options, err := a.claudeHelloOptions()
+		if err != nil || options.Model != tc.model || (options.Effort == nil) != tc.omitted ||
+			(!tc.omitted && *options.Effort != tc.effort) {
+			t.Fatalf("%s: %+v %v", tc.fields, options, err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	good := `{"accounts":[{"id":"one","name":"One","home":"one","type":"claude"}]}`
+	if err := os.WriteFile(path, []byte(good), 0600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fields := range []string{
+		`,"hello_model":""`, `,"hello_model":null`, `,"hello_model":1`, `,"hello_model":" sonnet"`,
+		`,"hello_effort":""`, `,"hello_effort":"invalid"`, `,"hello_effort":1`, `,"hello_effort":false`,
+	} {
+		raw := `{"accounts":[{"id":"one","name":"One","home":"one","type":"claude"` + fields + `}]}`
+		if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+		retained, err := reloadConfig(path, config)
+		if err == nil || retained.Accounts[0].HelloModel != "" {
+			t.Fatalf("accepted %s", fields)
+		}
 	}
 }
 

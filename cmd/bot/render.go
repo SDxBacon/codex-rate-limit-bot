@@ -82,7 +82,7 @@ func renderAccount(name string, state accountState, now time.Time) string {
 	status := "🟢 **讀取正常** · " + timerLabel(state.Timer)
 	footer := fmt.Sprintf("<t:%d:R> 更新", state.LastSuccess.Unix())
 	if state.Type == accountClaude {
-		status = "🟡 **CLI 回報** · " + timerLabel(timerUnknown)
+		status = "🟡 **CLI 回報** · " + timerLabel(state.Timer)
 		footer = fmt.Sprintf("<t:%d:R> 查詢 · 額度可能為快取", state.LastSuccess.Unix())
 	}
 	if state.Failed {
@@ -100,10 +100,7 @@ func renderAccount(name string, state accountState, now time.Time) string {
 	if snapshot.Weekly.ResetsAt != nil {
 		weekStyle = weeklyResetStyle(*snapshot.Weekly.ResetsAt, now)
 	}
-	hello := ""
-	if state.Type != accountClaude {
-		hello = helloLine(state)
-	}
+	hello := helloLine(state)
 	return fmt.Sprintf("%s\n> %s\n> **5 小時**　%s\n> **每週**　　%s\n-# %s%s",
 		heading, status, renderWindow(snapshot.FiveHour, fiveStyle, state.Failed),
 		renderWindow(snapshot.Weekly, weekStyle, state.Failed), footer, hello)

@@ -11,10 +11,52 @@ import (
 )
 
 type accountConfig struct {
-	ID   string      `json:"id"`
-	Name string      `json:"name"`
-	Home string      `json:"home"`
-	Type accountType `json:"type,omitempty"`
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Home        string          `json:"home"`
+	Type        accountType     `json:"type,omitempty"`
+	HelloModel  helloModel      `json:"hello_model,omitempty"`
+	HelloEffort json.RawMessage `json:"hello_effort,omitempty"`
+}
+
+type helloModel string
+
+func (m *helloModel) UnmarshalJSON(raw []byte) error {
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil || strings.TrimSpace(value) != value || value == "" ||
+		strings.ContainsAny(value, "\r\n\t") || len(value) > 200 {
+		return errors.New("hello_model must be a nonempty model name")
+	}
+	*m = helloModel(value)
+	return nil
+}
+
+type helloOptions struct {
+	Model  string
+	Effort *string
+}
+
+func (a accountConfig) claudeHelloOptions() (helloOptions, error) {
+	options := helloOptions{Model: string(a.HelloModel)}
+	if options.Model == "" {
+		options.Model = "sonnet"
+	}
+	effort := "low"
+	if len(a.HelloEffort) > 0 {
+		if string(a.HelloEffort) == "null" {
+			return options, nil
+		}
+		if err := json.Unmarshal(a.HelloEffort, &effort); err != nil {
+			return options, errors.New("hello_effort must be an effort name or null")
+		}
+	}
+	switch effort {
+	case "low", "medium", "high", "xhigh", "max":
+		options.Effort = &effort
+		return options, nil
+	default:
+		return options, errors.New("invalid hello_effort")
+	}
 }
 
 type accountType string
@@ -60,6 +102,12 @@ func loadConfig(path string) (appConfig, error) {
 	}
 	ids, homes := make(map[string]bool), make(map[string]bool)
 	for i, account := range config.Accounts {
+		if account.providerType() != accountClaude && (account.HelloModel != "" || len(account.HelloEffort) > 0) {
+			return appConfig{}, fmt.Errorf("account %d: hello settings require type claude", i+1)
+		}
+		if _, err := account.claudeHelloOptions(); err != nil {
+			return appConfig{}, fmt.Errorf("account %d: %w", i+1, err)
+		}
 		if kind := account.providerType(); kind != accountCodex && kind != accountClaude {
 			return appConfig{}, fmt.Errorf("account %d has invalid type", i+1)
 		}

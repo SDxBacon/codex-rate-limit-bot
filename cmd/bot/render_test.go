@@ -22,7 +22,7 @@ func TestUsageBar(t *testing.T) {
 
 func TestClaudeRenderingPartialAndCachedObservations(t *testing.T) {
 	used := 12.25
-	state := accountState{Type: accountClaude, LastUsage: &usageSnapshot{FiveHour: usageWindow{UsedPercent: &used}}, LastSuccess: time.Unix(1800000000, 0), Timer: timerActive, HelloAt: time.Unix(1800000000, 0)}
+	state := accountState{Type: accountClaude, LastUsage: &usageSnapshot{FiveHour: usageWindow{UsedPercent: &used}}, LastSuccess: time.Unix(1800000000, 0), Timer: timerUnknown}
 	got := renderAccount("Claude", state, state.LastSuccess)
 	for _, want := range []string{"### Claude · Claude", "🟡 **CLI 回報** · 5小時計時器狀態未知", "`████████░░`　**87.8% left** · 重設時間未知", "> **每週**　　— · 重設時間未知", "<t:1800000000:R> 查詢 · 額度可能為快取"} {
 		if !strings.Contains(got, want) {
@@ -49,6 +49,18 @@ func TestClaudeRenderingPartialAndCachedObservations(t *testing.T) {
 		got = renderAccount("Claude", state, state.LastSuccess)
 		if !strings.Contains(got, "**"+percentLabel(100-known)+"% left**") {
 			t.Fatal(got)
+		}
+	}
+}
+
+func TestValidatedClaudeRenderingTimerAndHello(t *testing.T) {
+	at := time.Unix(1900000000, 0)
+	snapshot := testSnapshot(1, 10, at.Add(timerWindow).Unix())
+	state := accountState{Type: accountClaude, LastUsage: &snapshot, LastSuccess: at, Timer: timerActive, HelloAt: at}
+	got := renderAccount("Claude", state, at)
+	for _, want := range []string{"CLI 回報", "5小時計時器運作中", "額度可能為快取", "Bot 嘗試 hello：<t:1900000000:f>"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %s: %s", want, got)
 		}
 	}
 }

@@ -13,7 +13,7 @@ import (
 )
 
 func TestCLICancellationStopsDescendants(t *testing.T) {
-	for _, mode := range []string{"probe", "hello", "claude"} {
+	for _, mode := range []string{"probe", "hello", "claude", "claude hello"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			bin := filepath.Join(dir, "codex")
@@ -29,6 +29,9 @@ func TestCLICancellationStopsDescendants(t *testing.T) {
 			go func() {
 				if mode == "hello" {
 					done <- sendHello(ctx, bin, dir)
+				} else if mode == "claude hello" {
+					options, _ := (accountConfig{}).claudeHelloOptions()
+					done <- sendClaudeHello(ctx, bin, dir, options)
 				} else if mode == "claude" {
 					_, err := probeClaudeUsage(ctx, bin, dir)
 					done <- err

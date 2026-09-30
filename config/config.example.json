@@ -9,7 +9,9 @@
       "id": "claude-personal",
       "name": "Personal Claude",
       "type": "claude",
-      "home": "claude-personal"
+      "home": "claude-personal",
+      "hello_model": "sonnet",
+      "hello_effort": "low"
     }
   ]
 }

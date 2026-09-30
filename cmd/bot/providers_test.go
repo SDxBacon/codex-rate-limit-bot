@@ -55,42 +55,6 @@ func TestMixedAccountsDispatchFailuresAndRecovery(t *testing.T) {
 	}
 }
 
-func TestClaudeNeverClassifiesTimerOrSendsHello(t *testing.T) {
-	root := t.TempDir()
-	base := time.Unix(1900000000, 0)
-	for _, name := range []string{"fixed zero", "rolling zero", "null reset", "expired reset", "used"} {
-		t.Run(name, func(t *testing.T) {
-			old := testSnapshot(0, 10, base.Add(timerWindow).Unix())
-			states := map[string]accountState{"one": {Type: accountClaude, Home: filepath.Join(root, "one"), LastUsage: &old, LastSuccess: base}}
-			sent := 0
-			providers := map[string]accountProvider{accountClaude: {Binary: "claude", Hello: func(context.Context, string, string) error { sent++; return nil }, Probe: func(context.Context, string, string) (usageSnapshot, error) {
-				s := testSnapshot(0, 10, base.Add(timerWindow).Unix())
-				switch name {
-				case "rolling zero":
-					s.FiveHour = newUsageWindow(0, base.Add(timerWindow+5*time.Minute).Unix())
-				case "null reset":
-					s.FiveHour.ResetsAt = nil
-				case "expired reset":
-					s.FiveHour = newUsageWindow(0, base.Add(-time.Hour).Unix())
-				case "used":
-					s.FiveHour = newUsageWindow(10, base.Add(timerWindow).Unix())
-				}
-				return s, nil
-			}}}
-			accounts := []accountConfig{{ID: "one", Home: "one", Type: accountClaude}}
-			probeAccounts(context.Background(), accounts, root, states, providers, func() time.Time { return base.Add(5 * time.Minute) }, nil)
-			if sent != 0 || states["one"].Timer != timerUnknown || !states["one"].HelloAt.IsZero() {
-				t.Fatal(states["one"])
-			}
-			state := states["one"]
-			state.Timer = timerInactive
-			if state.shouldSendHello(base.Add(6 * time.Minute)) {
-				t.Fatal("Claude passed hello gate")
-			}
-		})
-	}
-}
-
 func TestProviderAndHomeChangesResetAllEvidence(t *testing.T) {
 	root := t.TempDir()
 	base := time.Unix(1900000000, 0)

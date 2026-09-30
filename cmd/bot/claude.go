@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,7 +9,6 @@ import (
 	"math"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -86,149 +84,24 @@ func claudeEnvironment(home string) []string {
 	return append(env, "CLAUDE_CONFIG_DIR="+home, "DISABLE_AUTOUPDATER=1", "DISABLE_TELEMETRY=1", "DISABLE_ERROR_REPORTING=1")
 }
 
-// The CLI may return cached usage without identifying its source. This probe
-// reports a CLI observation only; it cannot supply timer evidence or freshness.
-func probeClaudeUsage(ctx context.Context, binary, home string) (snapshot usageSnapshot, probeErr error) {
-	home, err := filepath.Abs(home)
-	if err != nil {
-		return usageSnapshot{}, errors.New("claude setup: invalid_home")
-	}
-	// Resolve relative binary paths before changing the child's working directory.
-	if strings.ContainsRune(binary, filepath.Separator) {
-		binary, err = filepath.Abs(binary)
+// A CLI observation may be cached; it contains no freshness metadata.
+func probeClaudeUsage(ctx context.Context, binary, home string) (usageSnapshot, error) {
+	return probeClaudeUsageWithOptions(ctx, binary, home, claudeSessionOptions{})
+}
+
+func probeClaudeUsageWithOptions(ctx context.Context, binary, home string, options claudeSessionOptions) (snapshot usageSnapshot, err error) {
+	err = withClaudeSession(ctx, binary, home, options, func(session *claudeSession) error {
+		if _, err := session.request("initialize", false); err != nil {
+			return err
+		}
+		raw, err := session.request("get_usage", true)
 		if err != nil {
-			return usageSnapshot{}, errors.New("claude setup: invalid_binary")
+			return err
 		}
-	}
-	work, err := os.MkdirTemp("", "claude-monitor-")
-	if err != nil {
-		return usageSnapshot{}, errors.New("claude setup: temporary_directory_unavailable")
-	}
-	defer os.RemoveAll(work)
-	cmd := cliCommand(ctx, binary, "-p", "--input-format", "stream-json", "--output-format", "stream-json",
-		"--verbose", "--no-session-persistence", "--safe-mode", "--tools", "",
-		"--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--permission-mode", "dontAsk")
-	cmd.Dir = work
-	cmd.Env = claudeEnvironment(home)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return usageSnapshot{}, errors.New("claude setup: stdin_unavailable")
-	}
-	defer stdin.Close()
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return usageSnapshot{}, errors.New("claude setup: stdout_unavailable")
-	}
-	defer stdout.Close()
-	stderr := &cliStderr{}
-	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
-		return usageSnapshot{}, claudeFailure("start", err, nil, stderr)
-	}
-	readCtx, stopRead := context.WithCancel(ctx)
-	type event struct {
-		line []byte
-		err  error
-	}
-	events := make(chan event)
-	readerDone := make(chan struct{})
-	go func() {
-		defer close(readerDone)
-		scanner := bufio.NewScanner(stdout)
-		scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
-		for scanner.Scan() {
-			select {
-			case events <- event{line: append([]byte(nil), scanner.Bytes()...)}:
-			case <-readCtx.Done(): // Drain stdout during shutdown.
-			}
-		}
-		err := scanner.Err()
-		if err == nil {
-			err = io.EOF
-		}
-		select {
-		case events <- event{err: err}:
-		case <-readCtx.Done():
-		}
-	}()
-	stage := "initialize"
-	defer func() {
-		_ = stdin.Close()
-		stopRead()
-		waited := make(chan error, 1)
-		go func() { <-readerDone; waited <- cmd.Wait() }()
-		timer := time.NewTimer(processGrace)
-		defer timer.Stop()
-		var waitErr error
-		select {
-		case waitErr = <-waited:
-		case <-timer.C:
-			_ = killProcessGroup(cmd)
-			_ = stdout.Close()
-			waitErr = <-waited
-		}
-		if probeErr != nil {
-			probeErr = claudeFailure(stage, probeErr, waitErr, stderr)
-		}
-	}()
-	request := func(id, subtype string, skipBehaviors bool) (json.RawMessage, error) {
-		fields := map[string]any{"subtype": subtype}
-		if skipBehaviors {
-			fields["skip_behaviors"] = true
-		}
-		frame := map[string]any{"type": "control_request", "request_id": id, "request": fields}
-		if err := json.NewEncoder(stdin).Encode(frame); err != nil {
-			return nil, errors.New("stdin_write_failed")
-		}
-		for {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case e := <-events:
-				if e.err != nil {
-					return nil, e.err
-				}
-				var frame struct {
-					Type     string          `json:"type"`
-					Response json.RawMessage `json:"response"`
-				}
-				if err := json.Unmarshal(e.line, &frame); err != nil {
-					return nil, errors.New("invalid_control_json")
-				}
-				if frame.Type != "control_response" {
-					continue
-				}
-				var response struct {
-					Subtype   string          `json:"subtype"`
-					RequestID string          `json:"request_id"`
-					Response  json.RawMessage `json:"response"`
-					Error     json.RawMessage `json:"error"`
-				}
-				if err := json.Unmarshal(frame.Response, &response); err != nil {
-					return nil, errors.New("invalid_control_json")
-				}
-				if response.RequestID != id {
-					continue
-				}
-				if response.Subtype != "success" {
-					return nil, errors.New(claudeControlError(response.Error))
-				}
-				if len(response.Response) == 0 || string(response.Response) == "null" {
-					return nil, errors.New("empty_control_response")
-				}
-				return response.Response, nil
-			}
-		}
-	}
-	if _, err := request("1", "initialize", false); err != nil {
-		return usageSnapshot{}, err
-	}
-	stage = "get_usage"
-	raw, err := request("2", "get_usage", true)
-	if err != nil {
-		return usageSnapshot{}, err
-	}
-	return parseClaudeUsage(raw)
+		snapshot, err = parseClaudeUsage(raw)
+		return err
+	})
+	return snapshot, err
 }
 
 func claudeControlError(raw json.RawMessage) string {
@@ -267,7 +140,8 @@ func claudeFailure(stage string, cause, waitErr error, stderr *cliStderr) error 
 		for _, known := range []string{"invalid_usage_json", "usage_unavailable", "invalid_utilization",
 			"invalid_reset_timestamp", "stdin_write_failed", "invalid_control_json", "empty_control_response",
 			"control_error", "control_error_401", "control_error_403", "control_error_429",
-			"control_error_not_supported", "control_error_not_logged", "control_error_authentication"} {
+			"control_error_not_supported", "control_error_not_logged", "control_error_authentication",
+			"invalid_settings", "model_not_applied", "effort_not_applied", "invalid_result", "hello_failed", "process_exit"} {
 			if cause.Error() == known {
 				category = known
 				break

@@ -1,6 +1,6 @@
 # Claude CLI PoC
 
-這裡保留獨立實驗，使用 Python 標準函式庫，不需要安裝 Agent SDK。正式 bot 已另外實作 Go 版 Claude 監控，僅送控制請求；部署及驗收方式見專案 README。這些 PoC 仍不會自動啟動 bot 或更新 Discord。
+這裡保留使用 Python 標準函式庫的獨立實驗，不需要安裝 Agent SDK。正式 bot 已實作 Go 查詢與 hello 流程；一般查詢僅送控制請求，兩個 provider 都預設支援自動 hello；真實 timer 驗證尚未通過的版本不發布。另提供正式映像可執行、不需 Python 的 Go timer PoC；部署及驗收方式見專案 README。這些 PoC 不會啟動 bot 或更新 Discord。
 
 ## 重現
 
@@ -148,9 +148,9 @@ hello 使用同一程序的 user frame：
 
 程式只將有效未來 reset 標成 `running_candidate`。同帳號兩次相隔至少三分鐘、均確認端點成功，且 reset 在一秒容差內固定、未跨越舊 reset 時，標成 `running_evidence`。這是推論證據，並非伺服器回傳的 timer boolean。
 
-沒有足夠資料證明「未啟動」時，一律保持 `unknown`；本 PoC 完全不自動送 hello。下一個必要實驗是：在視窗到期且帳號沒有其他用量時取樣，手動送一次 hello，再觀察新 reset；並另行測試未曾啟動的帳號、缺值、token 更新與 Linux／ARM64。未完成這些實驗前，不應實作自動 hello 觸發規則。
+沒有足夠資料證明「未啟動」時，一律保持 `unknown`；本 PoC 完全不自動送 hello。下一個必要實驗是：在視窗到期且帳號沒有其他用量時取樣，手動送一次 hello，再觀察新 reset；並另行測試未曾啟動的帳號、缺值、token 更新與 Linux／ARM64。未完成這些實驗前，不能宣稱自動 hello 規則已由真實帳號驗證或發布。
 
-因此原計畫需修正：撤回 `0% + null reset` 代表未啟動的假設；額度成功回應還要考慮資料來源／新鮮度；新增可設定的 `hello_effort` 並驗證是否實際套用，不能把 Haiku 視為一定支援 low effort。第一版已實作額度監控及快取提示；Claude 自動 hello 與 hello_effort 尚未套用至正式設定或程式。
+因此原計畫需修正：撤回 `0% + null reset` 代表未啟動的假設；額度成功回應還要考慮資料來源／新鮮度；新增可設定的 `hello_effort` 並驗證是否實際套用，不能把 Haiku 視為一定支援 low effort。Go 已加入完整 hello 流程與每帳號 hello_model／hello_effort，預設 sonnet／low；Claude 與 Codex 預設共用 timer／hello 流程，沒有 Claude 專屬啟用開關；仍需本機隔離實測驗收後才提交發布版本。
 
 ## 驗證
 
@@ -161,3 +161,7 @@ python3 -B -m unittest discover -s poc -p 'test_*.py' -v
 10 個測試涵蓋 null、缺值、無時區、非法百分比、快取、跨 reset、固定 reset、帳號目錄優先順序與移除其他登入來源。它們驗證 PoC 不過度推論，不能取代真實帳號狀態轉換實驗。
 
 參考：[CLI 旗標](https://code.claude.com/docs/en/cli-reference)、[模型與 effort](https://code.claude.com/docs/en/model-config)、[環境變數](https://code.claude.com/docs/en/env-vars)。`get_usage` 與 `get_settings` 的細節以本機實驗性介面及實測為依據。
+
+## 本機隔離 ARM64 timer 實驗
+
+新增 Go `claude-poc` 子命令，直接使用正式映像內的同一套查詢／hello，不需安裝 Python、不呼叫 Discord。見 [本機隔離 timer 操作文件](CLAUDE_TIMER.zh-TW.md)。既有 Python 工具與模型／effort 查詢保留；Go 工具補上長時間取樣、報告接續、受控單次 hello 與完整轉換證據分析。目前只有假的 CLI／合成資料測試，尚未得到 Pi 的真實通過報告。
