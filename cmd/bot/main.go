@@ -15,60 +15,73 @@ const pollInterval = 5 * time.Minute
 
 type usageProbe func(context.Context, string, string) (usageSnapshot, error)
 
-func probeAccounts(ctx context.Context, accounts []accountConfig, root, binary string, states map[string]accountState,
-	probe usageProbe, hello helloRunner, now func() time.Time, onAttempt func()) {
+type accountProvider struct {
+	Binary string
+	Probe  usageProbe
+	Hello  helloRunner
+}
+
+func probeAccounts(ctx context.Context, accounts []accountConfig, root string, states map[string]accountState,
+	providers map[string]accountProvider, now func() time.Time, onAttempt func()) {
 	configured := make(map[string]bool, len(accounts))
 	for _, account := range accounts {
 		configured[account.ID] = true
 		home := filepath.Join(root, account.Home)
+		kind := account.providerType()
+		provider := providers[kind]
 		state := states[account.ID]
-		if state.Home != home {
+		oldType := state.Type
+		if oldType == "" {
+			oldType = accountCodex
+		}
+		if state.Home != home || oldType != kind {
 			state = accountState{Home: home}
 		}
+		state.Type = kind
 		state.expireHello(now().UTC())
 		probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-		snapshot, err := probe(probeCtx, binary, home)
+		snapshot, err := provider.Probe(probeCtx, provider.Binary, home)
 		cancel()
 		if err != nil {
 			state.Timer = timerUnknown
 			state.Failed = true
 			states[account.ID] = state
-			log.Printf("Codex usage read failed for %s: %v", account.ID, err)
+			log.Printf("%s usage read failed for %s: %v", kind, account.ID, err)
 			continue
 		}
 		readAt := now().UTC()
 		state.recordUsage(snapshot, readAt)
 		states[account.ID] = state
-		if !state.shouldSendHello(readAt) {
+		if kind != accountCodex || provider.Hello == nil || !state.shouldSendHello(readAt) {
 			continue
 		}
 		attemptAt := now().UTC()
 		state.LastAttempt = attemptAt
 		state.HelloAt = attemptAt
-		state.HelloReset = snapshot.FiveHour.ResetsAt
+		state.HelloReset = *snapshot.FiveHour.ResetsAt
 		state.Timer = timerUnknown
 		states[account.ID] = state
 		helloCtx, helloCancel := context.WithTimeout(ctx, helloTimeout)
-		err = hello(helloCtx, binary, home)
+		err = provider.Hello(helloCtx, provider.Binary, home)
 		helloCancel()
 		if err != nil {
 			log.Printf("Codex hello failed for %s: %v", account.ID, err)
 		}
 		// This read has its own deadline, regardless of how long hello took.
 		recheckCtx, recheckCancel := context.WithTimeout(ctx, probeTimeout)
-		recheck, err := probe(recheckCtx, binary, home)
+		recheck, err := provider.Probe(recheckCtx, provider.Binary, home)
 		recheckCancel()
 		if err != nil {
 			state.Failed = true
 			log.Printf("Codex usage recheck failed for %s: %v", account.ID, err)
 		} else {
 			recheckAt := now().UTC()
-			dr := time.Duration(recheck.FiveHour.ResetsAt-snapshot.FiveHour.ResetsAt) * time.Second
+			dr := time.Duration(*recheck.FiveHour.ResetsAt-*snapshot.FiveHour.ResetsAt) * time.Second
 			state.recordUsage(recheck, recheckAt)
-			if recheck.FiveHour.UsedPercent == 0 {
+			if *recheck.FiveHour.UsedPercent == 0 {
 				state.Timer = timerUnknown
 			} else if state.Timer == timerUnknown &&
-				recheckAt.Before(time.Unix(recheck.FiveHour.ResetsAt, 0)) &&
+				recheckAt.Before(time.Unix(*recheck.FiveHour.ResetsAt, 0)) &&
 				near(dr, 0) && !(dr >= timerTolerance && near(dr, recheckAt.Sub(readAt))) {
 				state.Timer = timerActive
 			}
@@ -85,8 +98,8 @@ func probeAccounts(ctx context.Context, accounts []accountConfig, root, binary s
 	}
 }
 
-func runCycle(ctx context.Context, d *discordClient, disk *savedState, statePath, binary, accountRoot string,
-	config appConfig, states map[string]accountState, probe usageProbe, hello helloRunner) {
+func runCycle(ctx context.Context, d *discordClient, disk *savedState, statePath, accountRoot string,
+	config appConfig, states map[string]accountState, providers map[string]accountProvider) {
 	publish := func() {
 		content := renderDashboard(config.Accounts, states, time.Now())
 		postCtx, postCancel := context.WithTimeout(ctx, 60*time.Second)
@@ -95,7 +108,7 @@ func runCycle(ctx context.Context, d *discordClient, disk *savedState, statePath
 			log.Printf("Discord dashboard update failed: %v", err)
 		}
 	}
-	probeAccounts(ctx, config.Accounts, accountRoot, binary, states, probe, hello, time.Now, publish)
+	probeAccounts(ctx, config.Accounts, accountRoot, states, providers, time.Now, publish)
 	publish()
 }
 
@@ -133,12 +146,20 @@ func run(ctx context.Context) error {
 	if binary == "" {
 		binary = "codex"
 	}
+	claudeBinary := os.Getenv("CLAUDE_BINARY")
+	if claudeBinary == "" {
+		claudeBinary = "claude"
+	}
+	providers := map[string]accountProvider{
+		accountCodex:  {Binary: binary, Probe: probeUsage, Hello: sendHello},
+		accountClaude: {Binary: claudeBinary, Probe: probeClaudeUsage},
+	}
 	// Rewrite legacy state once, removing persisted usage while retaining the ID.
 	if err := saveState(statePath, state); err != nil {
 		return fmt.Errorf("normalize state: %w", err)
 	}
 	states := make(map[string]accountState)
-	runCycle(ctx, d, &state, statePath, binary, accountRoot, config, states, probeUsage, sendHello)
+	runCycle(ctx, d, &state, statePath, accountRoot, config, states, providers)
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	for {
@@ -151,7 +172,7 @@ func run(ctx context.Context) error {
 			if reloadErr != nil {
 				log.Printf("reload config failed; using previous config: %v", reloadErr)
 			}
-			runCycle(ctx, d, &state, statePath, binary, accountRoot, config, states, probeUsage, sendHello)
+			runCycle(ctx, d, &state, statePath, accountRoot, config, states, providers)
 		}
 	}
 }

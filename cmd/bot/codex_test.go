@@ -19,8 +19,8 @@ func TestParseUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.FiveHour.UsedPercent != 82 || got.FiveHour.ResetsAt != 1900000000 ||
-		got.Weekly.UsedPercent != 61 || got.Weekly.ResetsAt != 2000000000 {
+	if *got.FiveHour.UsedPercent != 82 || *got.FiveHour.ResetsAt != 1900000000 ||
+		*got.Weekly.UsedPercent != 61 || *got.Weekly.ResetsAt != 2000000000 {
 		t.Fatalf("wrong windows: %+v", got)
 	}
 
@@ -157,7 +157,7 @@ printf '{"id":2,"result":%s}\n' '` + validRateResult + `'
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.FiveHour.UsedPercent != 82 || got.Weekly.UsedPercent != 61 {
+	if *got.FiveHour.UsedPercent != 82 || *got.Weekly.UsedPercent != 61 {
 		t.Fatalf("wrong usage: %+v", got)
 	}
 	b, err := os.ReadFile(trace)

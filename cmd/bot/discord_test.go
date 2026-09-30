@@ -120,7 +120,7 @@ func TestSingleDashboardAcrossRestartAndFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := &usageSnapshot{FiveHour: usageWindow{82, 1900000000}, Weekly: usageWindow{61, 2000000000}}
+	snapshot := &usageSnapshot{FiveHour: newUsageWindow(82, 1900000000), Weekly: newUsageWindow(61, 2000000000)}
 	states := map[string]accountState{"account-1": {LastUsage: snapshot, LastSuccess: time.Unix(1800000000, 0).UTC()}}
 	if err := saveState(path, state); err != nil {
 		t.Fatal(err)
@@ -128,7 +128,7 @@ func TestSingleDashboardAcrossRestartAndFailure(t *testing.T) {
 	if err := d.publish(ctx, &state, path, renderDashboard(accounts, states, time.Unix(1800000000, 0))); err != nil {
 		t.Fatal(err)
 	}
-	if fake.posts != 1 || fake.patches != 2 || !strings.Contains(fake.content, "### Account 1\n> 🟢 **讀取正常**") {
+	if fake.posts != 1 || fake.patches != 2 || !strings.Contains(fake.content, "### Account 1 · Codex\n> 🟢 **讀取正常**") {
 		t.Fatalf("update created another message: %+v", fake)
 	}
 	fake.getError = true
@@ -145,7 +145,7 @@ func TestSingleDashboardAcrossRestartAndFailure(t *testing.T) {
 	if err := d.publish(ctx, &state, path, renderDashboard(accounts, states, time.Unix(1800000000, 0))); err != nil {
 		t.Fatal(err)
 	}
-	if fake.posts != 1 || fake.patches != 3 || !strings.Contains(fake.content, "### Account 1\n> 🔴 **讀取失敗**") {
+	if fake.posts != 1 || fake.patches != 3 || !strings.Contains(fake.content, "### Account 1 · Codex\n> 🔴 **讀取失敗**") {
 		t.Fatalf("failed state did not preserve and edit message: %+v", fake)
 	}
 	state.MessageID = "" // Simulate a lost message ID while the dashboard remains.
@@ -171,6 +171,16 @@ func TestSingleDashboardAcrossRestartAndFailure(t *testing.T) {
 	if fake.posts != 1 || state.MessageID != "456" || fake.content != first {
 		t.Fatalf("legacy dashboard was not edited in place: %+v", fake)
 	}
+	for _, savedID := range []string{"456", ""} {
+		fake.content = previousDashboardHeading + "\n\n### Personal\nold Codex card"
+		state.MessageID = savedID
+		if err := d.publish(ctx, &state, path, first); err != nil {
+			t.Fatal(err)
+		}
+		if fake.posts != 1 || state.MessageID != "456" || fake.content != first {
+			t.Fatalf("Codex-heading migration duplicated dashboard: %+v", fake)
+		}
+	}
 }
 
 func TestIsDashboardAcceptsCurrentAndLegacyFormats(t *testing.T) {
@@ -188,8 +198,11 @@ func TestIsDashboardAcceptsCurrentAndLegacyFormats(t *testing.T) {
 	if !isDashboard(msg, "99") {
 		t.Fatal("previous unheaded dashboard was not recognized")
 	}
-	for _, heading := range []string{legacyDashboardHeading, dashboardTitle} {
+	for _, heading := range []string{legacyDashboardHeading, dashboardTitle, previousDashboardHeading} {
 		msg := discordMessage{Content: heading + "\n\naccount"}
+		if heading == previousDashboardHeading {
+			msg.Content = heading + "\n\n### Personal\naccount"
+		}
 		msg.Author.ID = "99"
 		if !isDashboard(msg, "99") || isDashboard(msg, "another-bot") {
 			t.Fatalf("unexpected dashboard identification for %q", heading)

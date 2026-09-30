@@ -16,15 +16,20 @@ const processGrace = time.Second
 // The npm CLI launches a native child. Cancel the whole process group so a
 // timeout cannot leave that child running. Docker's init reaps orphaned exits.
 func codexCommand(ctx context.Context, binary, home string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd := cliCommand(ctx, binary, args...)
 	cmd.Env = append(os.Environ(), "CODEX_HOME="+home)
+	return cmd
+}
+
+func cliCommand(ctx context.Context, binary string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return killCodexGroup(cmd) }
+	cmd.Cancel = func() error { return killProcessGroup(cmd) }
 	cmd.WaitDelay = processGrace
 	return cmd
 }
 
-func killCodexGroup(cmd *exec.Cmd) error {
+func killProcessGroup(cmd *exec.Cmd) error {
 	err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	if errors.Is(err, syscall.ESRCH) {
 		return os.ErrProcessDone
@@ -34,11 +39,11 @@ func killCodexGroup(cmd *exec.Cmd) error {
 
 // Keep bounded diagnostic input, but never log raw stderr: it may contain
 // credentials or account details. Only fixed, recognized categories are emitted.
-type codexStderr struct{ tail []byte }
+type cliStderr struct{ tail []byte }
 
 const stderrLimit = 4096
 
-func (s *codexStderr) Write(p []byte) (int, error) {
+func (s *cliStderr) Write(p []byte) (int, error) {
 	n := len(p)
 	if n >= stderrLimit {
 		s.tail = append(s.tail[:0], p[n-stderrLimit:]...)
@@ -53,7 +58,7 @@ func (s *codexStderr) Write(p []byte) (int, error) {
 }
 
 // Call only after cmd.Wait, which joins the stderr copying goroutine.
-func (s *codexStderr) summary() string {
+func (s *cliStderr) summary() string {
 	text := strings.ToLower(string(s.tail))
 	var found []string
 	for _, phrase := range []string{
@@ -72,6 +77,6 @@ func (s *codexStderr) summary() string {
 	return strings.Join(found, "; ")
 }
 
-func codexFailure(stage string, err, waitErr error, stderr *codexStderr) error {
+func codexFailure(stage string, err, waitErr error, stderr *cliStderr) error {
 	return fmt.Errorf("%s: %w; process exit: %v; stderr: %s", stage, err, waitErr, stderr.summary())
 }

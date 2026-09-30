@@ -9,7 +9,7 @@ import (
 )
 
 func testSnapshot(used, weekly int, reset int64) usageSnapshot {
-	return usageSnapshot{FiveHour: usageWindow{used, reset}, Weekly: usageWindow{weekly, reset + 7*24*3600}}
+	return usageSnapshot{FiveHour: newUsageWindow(float64(used), reset), Weekly: newUsageWindow(float64(weekly), reset+7*24*3600)}
 }
 
 func TestClassifyTimer(t *testing.T) {
@@ -25,12 +25,12 @@ func TestClassifyTimer(t *testing.T) {
 	}{
 		{"first zero", nil, base.Add(5 * time.Minute), testSnapshot(0, 10, base.Add(timerWindow+5*time.Minute).Unix()), timerUnknown},
 		{"first used", nil, base.Add(5 * time.Minute), testSnapshot(1, 10, base.Add(timerWindow).Unix()), timerActive},
-		{"fixed zero", &oldRolling, base.Add(5 * time.Minute), testSnapshot(0, 10, oldRolling.FiveHour.ResetsAt), timerActive},
+		{"fixed zero", &oldRolling, base.Add(5 * time.Minute), testSnapshot(0, 10, *oldRolling.FiveHour.ResetsAt), timerActive},
 		{"rolling zero", &oldRolling, base.Add(5 * time.Minute), testSnapshot(0, 10, base.Add(timerWindow+5*time.Minute).Unix()), timerInactive},
 		{"rolling tolerance", &oldRolling, base.Add(5 * time.Minute), testSnapshot(0, 10, base.Add(timerWindow+6*time.Minute).Unix()), timerInactive},
 		{"middle", &oldRolling, base.Add(5 * time.Minute), testSnapshot(0, 10, base.Add(timerWindow+2*time.Minute).Unix()), timerUnknown},
 		{"rolling used contradiction", &oldRolling, base.Add(5 * time.Minute), testSnapshot(1, 10, base.Add(timerWindow+5*time.Minute).Unix()), timerUnknown},
-		{"used fixed", &oldActive, base.Add(5 * time.Minute), testSnapshot(6, 10, oldActive.FiveHour.ResetsAt), timerActive},
+		{"used fixed", &oldActive, base.Add(5 * time.Minute), testSnapshot(6, 10, *oldActive.FiveHour.ResetsAt), timerActive},
 		{"too soon zero", &oldRolling, base.Add(2 * time.Minute), testSnapshot(0, 10, base.Add(timerWindow+2*time.Minute).Unix()), timerUnknown},
 		{"cycle crossed", &oldRolling, base.Add(timerWindow), testSnapshot(0, 10, base.Add(2*timerWindow).Unix()), timerUnknown},
 		{"cycle crossed used", &oldRolling, base.Add(timerWindow), testSnapshot(1, 10, base.Add(2*timerWindow).Unix()), timerUnknown},
@@ -63,7 +63,7 @@ func TestProbeAccountsFailureRetainsEvidenceAndHomesAreIsolated(t *testing.T) {
 		}
 		return testSnapshot(0, 100, base.Add(timerWindow+5*time.Minute).Unix()), nil
 	}
-	probeAccounts(context.Background(), accounts, root, "codex", states, probe, nil,
+	probeCodexAccounts(context.Background(), accounts, root, "codex", states, probe, nil,
 		func() time.Time { return base.Add(5 * time.Minute) }, nil)
 	if len(homes) != 2 || homes[0] != filepath.Join(root, "one") || homes[1] != filepath.Join(root, "two") {
 		t.Fatalf("wrong homes: %v", homes)
@@ -77,7 +77,7 @@ func TestProbeAccountsFailureRetainsEvidenceAndHomesAreIsolated(t *testing.T) {
 	probe = func(context.Context, string, string) (usageSnapshot, error) {
 		return testSnapshot(0, 100, base.Add(timerWindow+10*time.Minute).Unix()), nil
 	}
-	probeAccounts(context.Background(), accounts, root, "codex", states, probe, nil,
+	probeCodexAccounts(context.Background(), accounts, root, "codex", states, probe, nil,
 		func() time.Time { return base.Add(10 * time.Minute) }, nil)
 	if states["two"].Timer != timerInactive || states["two"].Failed {
 		t.Fatalf("preserved evidence was lost: %+v", states["two"])
@@ -112,13 +112,13 @@ func TestHelloGateRecheckAndCooldown(t *testing.T) {
 		return context.DeadlineExceeded
 	}
 	now := func() time.Time { return base.Add(5 * time.Minute) }
-	probeAccounts(context.Background(), account, root, "codex", states, probe, hello, now, func() { published++ })
+	probeCodexAccounts(context.Background(), account, root, "codex", states, probe, hello, now, func() { published++ })
 	state := states["one"]
 	if reads != 2 || sent != 1 || published != 1 || state.Timer != timerUnknown ||
-		state.HelloAt.IsZero() || state.LastUsage.FiveHour.UsedPercent != 0 {
+		state.HelloAt.IsZero() || *state.LastUsage.FiveHour.UsedPercent != 0 {
 		t.Fatalf("attempt did not recheck and mark unknown: reads=%d sent=%d published=%d state=%+v", reads, sent, published, state)
 	}
-	probeAccounts(context.Background(), account, root, "codex", states, probe, hello,
+	probeCodexAccounts(context.Background(), account, root, "codex", states, probe, hello,
 		func() time.Time { return base.Add(10 * time.Minute) }, nil)
 	if sent != 1 || states["one"].Timer != timerInactive {
 		t.Fatalf("cooldown failed: sent=%d state=%+v", sent, states["one"])
@@ -133,7 +133,7 @@ func TestHelloGateWeeklyAndOtherPlatform(t *testing.T) {
 	states := map[string]accountState{"one": {Home: filepath.Join(root, "one"), LastUsage: &old, LastSuccess: base}}
 	sent := 0
 	hello := func(context.Context, string, string) error { sent++; return nil }
-	probeAccounts(context.Background(), accounts, root, "codex", states,
+	probeCodexAccounts(context.Background(), accounts, root, "codex", states,
 		func(context.Context, string, string) (usageSnapshot, error) {
 			return testSnapshot(0, 100, base.Add(timerWindow+5*time.Minute).Unix()), nil
 		}, hello, func() time.Time { return base.Add(5 * time.Minute) }, nil)
@@ -142,9 +142,9 @@ func TestHelloGateWeeklyAndOtherPlatform(t *testing.T) {
 	}
 	// Another platform starts the timer before this bot has sent anything.
 	states["one"] = accountState{Home: filepath.Join(root, "one"), LastUsage: &old, LastSuccess: base}
-	probeAccounts(context.Background(), accounts, root, "codex", states,
+	probeCodexAccounts(context.Background(), accounts, root, "codex", states,
 		func(context.Context, string, string) (usageSnapshot, error) {
-			return testSnapshot(0, 10, old.FiveHour.ResetsAt), nil
+			return testSnapshot(0, 10, *old.FiveHour.ResetsAt), nil
 		}, hello, func() time.Time { return base.Add(5 * time.Minute) }, nil)
 	if states["one"].Timer != timerActive || sent != 0 || !states["one"].HelloAt.IsZero() {
 		t.Fatalf("external activation sent hello: %+v", states["one"])
@@ -157,7 +157,7 @@ func TestHomeChangeAndRestartLoseEvidence(t *testing.T) {
 	old := testSnapshot(0, 10, base.Add(timerWindow).Unix())
 	states := map[string]accountState{"one": {Home: filepath.Join(root, "old"), LastUsage: &old, LastSuccess: base,
 		LastAttempt: base, HelloAt: base}}
-	probeAccounts(context.Background(), []accountConfig{{ID: "one", Home: "new"}}, root, "codex", states,
+	probeCodexAccounts(context.Background(), []accountConfig{{ID: "one", Home: "new"}}, root, "codex", states,
 		func(context.Context, string, string) (usageSnapshot, error) {
 			return testSnapshot(0, 10, base.Add(timerWindow+5*time.Minute).Unix()), nil
 		}, nil, func() time.Time { return base.Add(5 * time.Minute) }, nil)
@@ -166,7 +166,7 @@ func TestHomeChangeAndRestartLoseEvidence(t *testing.T) {
 	}
 	// A fresh map after restart also requires a second zero-percent read.
 	states = make(map[string]accountState)
-	probeAccounts(context.Background(), []accountConfig{{ID: "one", Home: "new"}}, root, "codex", states,
+	probeCodexAccounts(context.Background(), []accountConfig{{ID: "one", Home: "new"}}, root, "codex", states,
 		func(context.Context, string, string) (usageSnapshot, error) {
 			return testSnapshot(0, 10, base.Add(timerWindow+5*time.Minute).Unix()), nil
 		}, nil, func() time.Time { return base.Add(5 * time.Minute) }, nil)
@@ -181,7 +181,7 @@ func TestRecheckFailureKeepsPreSendUsage(t *testing.T) {
 	old := testSnapshot(0, 10, base.Add(timerWindow).Unix())
 	states := map[string]accountState{"one": {Home: filepath.Join(root, "one"), LastUsage: &old, LastSuccess: base}}
 	reads := 0
-	probeAccounts(context.Background(), []accountConfig{{ID: "one", Home: "one"}}, root, "codex", states,
+	probeCodexAccounts(context.Background(), []accountConfig{{ID: "one", Home: "one"}}, root, "codex", states,
 		func(context.Context, string, string) (usageSnapshot, error) {
 			reads++
 			if reads == 2 {
@@ -192,7 +192,7 @@ func TestRecheckFailureKeepsPreSendUsage(t *testing.T) {
 		func() time.Time { return base.Add(5 * time.Minute) }, nil)
 	state := states["one"]
 	if !state.Failed || state.Timer != timerUnknown || !state.LastSuccess.Equal(base.Add(5*time.Minute)) ||
-		state.LastUsage.FiveHour.ResetsAt != base.Add(timerWindow+5*time.Minute).Unix() {
+		*state.LastUsage.FiveHour.ResetsAt != base.Add(timerWindow+5*time.Minute).Unix() {
 		t.Fatalf("failed recheck lost pre-send usage: %+v", state)
 	}
 }
@@ -209,12 +209,12 @@ func TestRestartCanSendAgainAfterTwoReads(t *testing.T) {
 			return testSnapshot(0, 10, reset), nil
 		}
 	}
-	probeAccounts(context.Background(), accounts, root, "codex", states,
+	probeCodexAccounts(context.Background(), accounts, root, "codex", states,
 		probe(base.Add(timerWindow).Unix()), hello, func() time.Time { return base }, nil)
 	if sent != 0 || states["one"].Timer != timerUnknown {
 		t.Fatalf("first read triggered hello: %+v", states["one"])
 	}
-	probeAccounts(context.Background(), accounts, root, "codex", states,
+	probeCodexAccounts(context.Background(), accounts, root, "codex", states,
 		probe(base.Add(timerWindow+5*time.Minute).Unix()), hello,
 		func() time.Time { return base.Add(5 * time.Minute) }, nil)
 	if sent != 1 {
@@ -228,7 +228,7 @@ func TestRecheckUsedConfirmsActiveAndHelloExpires(t *testing.T) {
 	old := testSnapshot(0, 10, base.Add(timerWindow).Unix())
 	states := map[string]accountState{"one": {Home: filepath.Join(root, "one"), LastUsage: &old, LastSuccess: base}}
 	reads := 0
-	probeAccounts(context.Background(), []accountConfig{{ID: "one", Home: "one"}}, root, "codex", states,
+	probeCodexAccounts(context.Background(), []accountConfig{{ID: "one", Home: "one"}}, root, "codex", states,
 		func(context.Context, string, string) (usageSnapshot, error) {
 			reads++
 			if reads == 2 {
@@ -245,4 +245,9 @@ func TestRecheckUsedConfirmsActiveAndHelloExpires(t *testing.T) {
 	if !state.HelloAt.IsZero() {
 		t.Fatalf("old hello timestamp remains: %+v", state)
 	}
+}
+
+// Keep the Codex regression cases focused on their existing behavior.
+func probeCodexAccounts(ctx context.Context, accounts []accountConfig, root, binary string, states map[string]accountState, probe usageProbe, hello helloRunner, now func() time.Time, onAttempt func()) {
+	probeAccounts(ctx, accounts, root, states, map[string]accountProvider{accountCodex: {Binary: binary, Probe: probe, Hello: hello}}, now, onAttempt)
 }

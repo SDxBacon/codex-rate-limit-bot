@@ -8,36 +8,76 @@ import (
 
 func TestUsageBar(t *testing.T) {
 	for _, tc := range []struct {
-		percent int
+		percent float64
 		want    string
 	}{
 		{0, "░░░░░░░░░░"}, {30, "███░░░░░░░"}, {61, "██████░░░░"},
 		{82, "████████░░"}, {100, "██████████"},
 	} {
 		if got := usageBar(tc.percent); got != tc.want {
-			t.Fatalf("%d%%: got %q, want %q", tc.percent, got, tc.want)
+			t.Fatalf("%g%%: got %q, want %q", tc.percent, got, tc.want)
 		}
 	}
 }
 
+func TestClaudeRenderingPartialAndCachedObservations(t *testing.T) {
+	used := 12.25
+	state := accountState{Type: accountClaude, LastUsage: &usageSnapshot{FiveHour: usageWindow{UsedPercent: &used}}, LastSuccess: time.Unix(1800000000, 0), Timer: timerActive, HelloAt: time.Unix(1800000000, 0)}
+	got := renderAccount("Claude", state, state.LastSuccess)
+	for _, want := range []string{"### Claude · Claude", "🟡 **CLI 回報** · 5小時計時器狀態未知", "`████████░░`　**87.8% left** · 重設時間未知", "> **每週**　　— · 重設時間未知", "<t:1800000000:R> 查詢 · 額度可能為快取"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %s", want, got)
+		}
+	}
+	if strings.Contains(got, "Bot 嘗試 hello") || strings.Contains(got, "運作中") || strings.Contains(got, "更新") {
+		t.Fatal(got)
+	}
+	state.Failed = true
+	got = renderAccount("Claude", state, state.LastSuccess)
+	if !strings.Contains(got, "讀取失敗") || !strings.Contains(got, "87.8% left＊") || !strings.Contains(got, "上次取得的 CLI 資料") {
+		t.Fatal(got)
+	}
+	// Rounded percentages must not change bar fill (89.96 displays as 90).
+	used = 10.04
+	state.Failed = false
+	got = renderAccount("Claude", state, state.LastSuccess)
+	if !strings.Contains(got, "`████████░░`　**90% left**") {
+		t.Fatal(got)
+	}
+	for _, known := range []float64{0, 100} {
+		used = known
+		got = renderAccount("Claude", state, state.LastSuccess)
+		if !strings.Contains(got, "**"+percentLabel(100-known)+"% left**") {
+			t.Fatal(got)
+		}
+	}
+}
+
+func TestMixedDashboardLabelsUnobservedProviders(t *testing.T) {
+	got := renderDashboard([]accountConfig{{ID: "a", Name: "A"}, {ID: "b", Name: "B", Type: accountClaude}}, nil, time.Now())
+	if !strings.Contains(got, "### A · Codex") || !strings.Contains(got, "### B · Claude") || strings.Index(got, "### A") > strings.Index(got, "### B") {
+		t.Fatal(got)
+	}
+}
+
 func TestRemainingPercent(t *testing.T) {
-	for _, tc := range []struct{ used, remaining int }{
+	for _, tc := range []struct{ used, remaining float64 }{
 		{0, 100}, {61, 39}, {82, 18}, {100, 0},
 	} {
 		if got := remainingPercent(tc.used); got != tc.remaining {
-			t.Fatalf("used %d%%: remaining %d%%, want %d%%", tc.used, got, tc.remaining)
+			t.Fatalf("used %g%%: remaining %g%%, want %g%%", tc.used, got, tc.remaining)
 		}
 	}
 }
 
 func TestDashboardAccountsInConfigOrder(t *testing.T) {
 	accounts := []accountConfig{{ID: "second", Name: "Personal"}, {ID: "first", Name: "Work"}}
-	snapshot := &usageSnapshot{FiveHour: usageWindow{UsedPercent: 82, ResetsAt: 1900000000}, Weekly: usageWindow{UsedPercent: 61, ResetsAt: 2000000000}}
+	snapshot := &usageSnapshot{FiveHour: newUsageWindow(82, 1900000000), Weekly: newUsageWindow(61, 2000000000)}
 	last := time.Unix(1800000000, 0)
 	states := map[string]accountState{"first": {LastUsage: snapshot, LastSuccess: last, Failed: true, Timer: timerUnknown}}
 	got := renderDashboard(accounts, states, last)
-	if !strings.HasPrefix(got, "## Codex 額度\n\n### Personal\n> ⚪ **等待首次讀取** · 5小時計時器狀態未知\n> **5 小時**　—\n> **每週**　　—\n-# 尚無用量資料\n\n") ||
-		!strings.Contains(got, "### Work\n> 🔴 **讀取失敗** · 5小時計時器狀態未知") || strings.Index(got, "Personal") > strings.Index(got, "Work") {
+	if !strings.HasPrefix(got, "## AI 帳號額度\n\n### Personal · Codex\n> ⚪ **等待首次讀取** · 5小時計時器狀態未知\n> **5 小時**　—\n> **每週**　　—\n-# 尚無用量資料\n\n") ||
+		!strings.Contains(got, "### Work · Codex\n> 🔴 **讀取失敗** · 5小時計時器狀態未知") || strings.Index(got, "Personal") > strings.Index(got, "Work") {
 		t.Fatal(got)
 	}
 	for _, part := range []string{
@@ -53,11 +93,11 @@ func TestDashboardAccountsInConfigOrder(t *testing.T) {
 
 func TestRenderAccountEscapesMarkdownName(t *testing.T) {
 	got := renderAccount("Team *one* `test`", accountState{}, time.Unix(1800000000, 0))
-	if !strings.HasPrefix(got, "### Team \\*one\\* \\`test\\`\n") {
+	if !strings.HasPrefix(got, "### Team \\*one\\* \\`test\\` · Codex\n") {
 		t.Fatal(got)
 	}
 	failed := renderAccount("Team", accountState{Failed: true}, time.Unix(1800000000, 0))
-	if !strings.HasPrefix(failed, "### Team\n> 🔴 **讀取失敗**") ||
+	if !strings.HasPrefix(failed, "### Team · Codex\n> 🔴 **讀取失敗**") ||
 		!strings.Contains(failed, "> **5 小時**　—\n> **每週**　　—") ||
 		!strings.HasSuffix(failed, "-# 尚無成功讀取資料") {
 		t.Fatal(failed)
@@ -65,7 +105,7 @@ func TestRenderAccountEscapesMarkdownName(t *testing.T) {
 }
 
 func TestRenderAccountTimerStatesAndHello(t *testing.T) {
-	snapshot := &usageSnapshot{FiveHour: usageWindow{UsedPercent: 82, ResetsAt: 1900000000}, Weekly: usageWindow{UsedPercent: 61, ResetsAt: 2000000000}}
+	snapshot := &usageSnapshot{FiveHour: newUsageWindow(82, 1900000000), Weekly: newUsageWindow(61, 2000000000)}
 	state := accountState{LastUsage: snapshot, LastSuccess: time.Unix(1800000000, 0)}
 	for _, tc := range []struct {
 		status timerStatus
@@ -104,7 +144,7 @@ func TestRenderAccountTimerStatesAndHello(t *testing.T) {
 func TestWeeklyResetSwitchesToTimeWithin24Hours(t *testing.T) {
 	const resetAt int64 = 2000000000
 	reset := time.Unix(resetAt, 0)
-	snapshot := &usageSnapshot{FiveHour: usageWindow{UsedPercent: 82, ResetsAt: 1900000000}, Weekly: usageWindow{UsedPercent: 61, ResetsAt: resetAt}}
+	snapshot := &usageSnapshot{FiveHour: newUsageWindow(82, 1900000000), Weekly: newUsageWindow(61, resetAt)}
 	for _, tc := range []struct {
 		name  string
 		now   time.Time

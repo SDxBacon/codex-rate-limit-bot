@@ -12,8 +12,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 ARG CODEX_VERSION=0.156.0
+ARG CLAUDE_VERSION=2.1.284
 RUN npm install -g --omit=dev @openai/codex@${CODEX_VERSION} \
     && codex --version
+RUN npm install -g --omit=dev @anthropic-ai/claude-code@${CLAUDE_VERSION} \
+    && claude --version
 
 COPY --from=build /out/codex-ratelimite-bot /usr/local/bin/codex-ratelimite-bot
 ENV HOME=/tmp

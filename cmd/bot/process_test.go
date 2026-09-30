@@ -12,8 +12,8 @@ import (
 	"time"
 )
 
-func TestCodexCancellationStopsDescendants(t *testing.T) {
-	for _, mode := range []string{"probe", "hello"} {
+func TestCLICancellationStopsDescendants(t *testing.T) {
+	for _, mode := range []string{"probe", "hello", "claude"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			bin := filepath.Join(dir, "codex")
@@ -29,6 +29,9 @@ func TestCodexCancellationStopsDescendants(t *testing.T) {
 			go func() {
 				if mode == "hello" {
 					done <- sendHello(ctx, bin, dir)
+				} else if mode == "claude" {
+					_, err := probeClaudeUsage(ctx, bin, dir)
+					done <- err
 				} else {
 					_, err := probeUsage(ctx, bin, dir)
 					done <- err
@@ -63,8 +66,8 @@ func TestCodexCancellationStopsDescendants(t *testing.T) {
 	}
 }
 
-func TestCodexStderrIsBoundedAndDoesNotExposeRawText(t *testing.T) {
-	s := &codexStderr{}
+func TestCLIStderrIsBoundedAndDoesNotExposeRawText(t *testing.T) {
+	s := &cliStderr{}
 	for _, chunk := range []string{strings.Repeat("secret", 2000), "Resource temporarily ", "unavailable (os error 11) token=private-value"} {
 		if n, err := s.Write([]byte(chunk)); n != len(chunk) || err != nil {
 			t.Fatalf("write: n=%d err=%v", n, err)
@@ -76,7 +79,7 @@ func TestCodexStderrIsBoundedAndDoesNotExposeRawText(t *testing.T) {
 	if got := s.summary(); got != "resource temporarily unavailable" {
 		t.Fatalf("unexpected summary: %q", got)
 	}
-	s = &codexStderr{}
+	s = &cliStderr{}
 	_, _ = s.Write([]byte("unknown error with private-value"))
 	if strings.Contains(s.summary(), "private-value") {
 		t.Fatal("unknown stderr leaked")

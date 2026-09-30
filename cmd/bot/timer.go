@@ -16,6 +16,7 @@ const minimumComparison = 3 * time.Minute
 
 type accountState struct {
 	Home        string
+	Type        string
 	LastUsage   *usageSnapshot
 	LastSuccess time.Time
 	Timer       timerStatus
@@ -30,8 +31,11 @@ func near(a, b time.Duration) bool {
 }
 
 func classifyTimer(previous *usageSnapshot, previousAt time.Time, current usageSnapshot, currentAt time.Time) timerStatus {
-	used := current.FiveHour.UsedPercent
-	if !currentAt.Before(time.Unix(current.FiveHour.ResetsAt, 0)) {
+	if current.FiveHour.UsedPercent == nil || current.FiveHour.ResetsAt == nil {
+		return timerUnknown
+	}
+	used := *current.FiveHour.UsedPercent
+	if !currentAt.Before(time.Unix(*current.FiveHour.ResetsAt, 0)) {
 		return timerUnknown
 	}
 	if previous == nil {
@@ -41,18 +45,21 @@ func classifyTimer(previous *usageSnapshot, previousAt time.Time, current usageS
 		return timerUnknown
 	}
 	dt := currentAt.Sub(previousAt)
-	oldReset := time.Unix(previous.FiveHour.ResetsAt, 0)
+	if previous.FiveHour.UsedPercent == nil || previous.FiveHour.ResetsAt == nil {
+		return timerUnknown
+	}
+	oldReset := time.Unix(*previous.FiveHour.ResetsAt, 0)
 	valid := dt >= minimumComparison && dt < timerWindow && currentAt.Before(oldReset) &&
 		previousAt.Before(oldReset)
 	if !valid {
 		return timerUnknown
 	}
-	dr := time.Duration(current.FiveHour.ResetsAt-previous.FiveHour.ResetsAt) * time.Second
+	dr := time.Duration(*current.FiveHour.ResetsAt-*previous.FiveHour.ResetsAt) * time.Second
 	if near(dr, dt) {
 		if used > 0 {
 			return timerUnknown
 		}
-		if previous.FiveHour.UsedPercent == 0 && near(time.Unix(current.FiveHour.ResetsAt, 0).Sub(currentAt), timerWindow) {
+		if *previous.FiveHour.UsedPercent == 0 && near(time.Unix(*current.FiveHour.ResetsAt, 0).Sub(currentAt), timerWindow) {
 			return timerInactive
 		}
 		return timerUnknown
@@ -65,7 +72,10 @@ func classifyTimer(previous *usageSnapshot, previousAt time.Time, current usageS
 
 func (state *accountState) recordUsage(snapshot usageSnapshot, at time.Time) {
 	state.expireHello(at)
-	state.Timer = classifyTimer(state.LastUsage, state.LastSuccess, snapshot, at)
+	state.Timer = timerUnknown
+	if state.Type != accountClaude {
+		state.Timer = classifyTimer(state.LastUsage, state.LastSuccess, snapshot, at)
+	}
 	state.LastUsage = &snapshot
 	state.LastSuccess = at
 	state.Failed = false
@@ -80,7 +90,7 @@ func (state *accountState) expireHello(at time.Time) {
 }
 
 func (state *accountState) shouldSendHello(now time.Time) bool {
-	return state.Timer == timerInactive && state.LastUsage != nil &&
-		state.LastUsage.Weekly.UsedPercent < 100 &&
+	return state.Type != accountClaude && state.Timer == timerInactive && state.LastUsage != nil &&
+		state.LastUsage.Weekly.UsedPercent != nil && *state.LastUsage.Weekly.UsedPercent < 100 &&
 		(state.LastAttempt.IsZero() || now.Sub(state.LastAttempt) >= timerWindow)
 }

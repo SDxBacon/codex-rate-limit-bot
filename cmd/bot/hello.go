@@ -16,7 +16,7 @@ func sendHello(ctx context.Context, binary, codexHome string) error {
 		"--sandbox", "read-only", "hello")
 	cmd.Stdin = nil
 	cmd.Stdout = io.Discard
-	stderr := &codexStderr{}
+	stderr := &cliStderr{}
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
 		return codexFailure("codex hello", err, err, stderr)

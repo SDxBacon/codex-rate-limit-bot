@@ -141,6 +141,7 @@ func isDashboard(msg discordMessage, botID string) bool {
 		return false
 	}
 	if strings.HasPrefix(msg.Content, dashboardHeading+"\n\n### ") ||
+		strings.HasPrefix(msg.Content, previousDashboardHeading+"\n\n### ") ||
 		strings.HasPrefix(msg.Content, legacyDashboardHeading+"\n\n") ||
 		strings.HasPrefix(msg.Content, dashboardTitle+"\n\n") {
 		return true

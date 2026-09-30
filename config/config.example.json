@@ -2,8 +2,14 @@
   "accounts": [
     {
       "id": "account-1",
-      "name": "Account 1",
+      "name": "Personal Codex",
       "home": "account-1"
+    },
+    {
+      "id": "claude-personal",
+      "name": "Personal Claude",
+      "type": "claude",
+      "home": "claude-personal"
     }
   ]
 }

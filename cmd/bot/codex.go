@@ -10,16 +10,6 @@ import (
 	"time"
 )
 
-type usageWindow struct {
-	UsedPercent int   `json:"used_percent"`
-	ResetsAt    int64 `json:"resets_at"`
-}
-
-type usageSnapshot struct {
-	FiveHour usageWindow `json:"five_hour"`
-	Weekly   usageWindow `json:"weekly"`
-}
-
 type rateWindow struct {
 	UsedPercent        *int   `json:"usedPercent"`
 	WindowDurationMins *int   `json:"windowDurationMins"`
@@ -70,7 +60,7 @@ func parseUsage(raw json.RawMessage) (usageSnapshot, error) {
 			*window.UsedPercent < 0 || *window.UsedPercent > 100 || *window.ResetsAt <= 0 {
 			return usageSnapshot{}, errors.New("codex rate-limit window has invalid data")
 		}
-		value := usageWindow{UsedPercent: *window.UsedPercent, ResetsAt: *window.ResetsAt}
+		value := newUsageWindow(float64(*window.UsedPercent), *window.ResetsAt)
 		if *window.WindowDurationMins == 300 {
 			snapshot.FiveHour, gotFive = value, true
 		} else {
@@ -97,7 +87,7 @@ func probeUsage(ctx context.Context, binary, codexHome string) (snapshot usageSn
 		return usageSnapshot{}, err
 	}
 	defer stdout.Close()
-	stderr := &codexStderr{}
+	stderr := &cliStderr{}
 	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return usageSnapshot{}, fmt.Errorf("start codex CLI: %w", err)
@@ -120,7 +110,7 @@ func probeUsage(ctx context.Context, binary, codexHome string) (snapshot usageSn
 		select {
 		case waitErr = <-waited:
 		case <-timer.C:
-			_ = killCodexGroup(cmd)
+			_ = killProcessGroup(cmd)
 			_ = stdout.Close()
 			waitErr = <-waited
 		}
@@ -177,7 +167,7 @@ func probeUsage(ctx context.Context, binary, codexHome string) (snapshot usageSn
 					return nil, errors.New("unexpected codex app-server response ID")
 				}
 				if response.Error != nil {
-					return nil, fmt.Errorf("codex app-server error %d: %s", response.Error.Code, response.Error.Message)
+					return nil, fmt.Errorf("codex app-server error %d", response.Error.Code)
 				}
 				if len(response.Result) == 0 {
 					return nil, errors.New("codex app-server returned no result")

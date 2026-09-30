@@ -2,20 +2,23 @@ package main
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const dashboardTitle = "Codex Usage Monitor" // Legacy heading, kept for message recovery.
 const legacyDashboardHeading = "**" + dashboardTitle + "**"
-const dashboardHeading = "## Codex 額度"
+const previousDashboardHeading = "## Codex 額度"
+const dashboardHeading = "## AI 帳號額度"
 
 var discordMarkdownEscaper = strings.NewReplacer(
 	"\\", "\\\\", "*", "\\*", "_", "\\_", "~", "\\~", "`", "\\`", "|", "\\|",
 )
 
-func usageBar(percent int) string {
-	filled := percent / 10
+func usageBar(percent float64) string {
+	filled := int(math.Floor(percent / 10))
 	if filled < 0 {
 		filled = 0
 	}
@@ -25,8 +28,12 @@ func usageBar(percent int) string {
 	return strings.Repeat("█", filled) + strings.Repeat("░", 10-filled)
 }
 
-func remainingPercent(usedPercent int) int {
+func remainingPercent(usedPercent float64) float64 {
 	return 100 - usedPercent
+}
+
+func percentLabel(percent float64) string {
+	return strings.TrimSuffix(strconv.FormatFloat(percent, 'f', 1, 64), ".0")
 }
 
 func timerLabel(status timerStatus) string {
@@ -61,24 +68,62 @@ func helloLine(state accountState) string {
 
 func renderAccount(name string, state accountState, now time.Time) string {
 	snapshot := state.LastUsage
-	heading := "### " + discordMarkdownEscaper.Replace(name)
+	provider := "Codex"
+	if state.Type == accountClaude {
+		provider = "Claude"
+	}
+	heading := "### " + discordMarkdownEscaper.Replace(name) + " · " + provider
 	if snapshot == nil {
 		if state.Failed {
 			return heading + "\n> 🔴 **讀取失敗** · 5小時計時器狀態未知\n> **5 小時**　—\n> **每週**　　—\n-# 尚無成功讀取資料"
 		}
 		return heading + "\n> ⚪ **等待首次讀取** · 5小時計時器狀態未知\n> **5 小時**　—\n> **每週**　　—\n-# 尚無用量資料"
 	}
-	fiveHourRemaining := remainingPercent(snapshot.FiveHour.UsedPercent)
-	weeklyRemaining := remainingPercent(snapshot.Weekly.UsedPercent)
-	if state.Failed {
-		return fmt.Sprintf("%s\n> 🔴 **讀取失敗** · 5小時計時器狀態未知\n> **5 小時**　`%s`　**%d%% left＊** · %s\n> **每週**　　`%s`　**%d%% left＊** · %s\n-# ＊上次成功讀取的資料 · <t:%d:R> 更新%s",
-			heading, usageBar(fiveHourRemaining), fiveHourRemaining, resetAtLabel(snapshot.FiveHour.ResetsAt, "s"),
-			usageBar(weeklyRemaining), weeklyRemaining, resetAtLabel(snapshot.Weekly.ResetsAt, weeklyResetStyle(snapshot.Weekly.ResetsAt, now)), state.LastSuccess.Unix(), helloLine(state))
+	status := "🟢 **讀取正常** · " + timerLabel(state.Timer)
+	footer := fmt.Sprintf("<t:%d:R> 更新", state.LastSuccess.Unix())
+	if state.Type == accountClaude {
+		status = "🟡 **CLI 回報** · " + timerLabel(timerUnknown)
+		footer = fmt.Sprintf("<t:%d:R> 查詢 · 額度可能為快取", state.LastSuccess.Unix())
 	}
-	return fmt.Sprintf("%s\n> 🟢 **讀取正常** · %s\n> **5 小時**　`%s`　**%d%% left** · %s\n> **每週**　　`%s`　**%d%% left** · %s\n-# <t:%d:R> 更新%s",
-		heading, timerLabel(state.Timer), usageBar(fiveHourRemaining), fiveHourRemaining,
-		resetAtLabel(snapshot.FiveHour.ResetsAt, "t"), usageBar(weeklyRemaining), weeklyRemaining,
-		resetAtLabel(snapshot.Weekly.ResetsAt, weeklyResetStyle(snapshot.Weekly.ResetsAt, now)), state.LastSuccess.Unix(), helloLine(state))
+	if state.Failed {
+		status = "🔴 **讀取失敗** · " + timerLabel(timerUnknown)
+		footer = "＊上次成功讀取的資料 · " + footer
+		if state.Type == accountClaude {
+			footer = fmt.Sprintf("＊上次取得的 CLI 資料 · <t:%d:R> 查詢 · 額度可能為快取", state.LastSuccess.Unix())
+		}
+	}
+	fiveStyle := "t"
+	if state.Failed {
+		fiveStyle = "s"
+	}
+	weekStyle := "d"
+	if snapshot.Weekly.ResetsAt != nil {
+		weekStyle = weeklyResetStyle(*snapshot.Weekly.ResetsAt, now)
+	}
+	hello := ""
+	if state.Type != accountClaude {
+		hello = helloLine(state)
+	}
+	return fmt.Sprintf("%s\n> %s\n> **5 小時**　%s\n> **每週**　　%s\n-# %s%s",
+		heading, status, renderWindow(snapshot.FiveHour, fiveStyle, state.Failed),
+		renderWindow(snapshot.Weekly, weekStyle, state.Failed), footer, hello)
+}
+
+func renderWindow(window usageWindow, resetStyle string, stale bool) string {
+	percent := "—"
+	if window.UsedPercent != nil {
+		remaining := remainingPercent(*window.UsedPercent)
+		mark := ""
+		if stale {
+			mark = "＊"
+		}
+		percent = fmt.Sprintf("`%s`　**%s%% left%s**", usageBar(remaining), percentLabel(remaining), mark)
+	}
+	reset := "重設時間未知"
+	if window.ResetsAt != nil {
+		reset = resetAtLabel(*window.ResetsAt, resetStyle)
+	}
+	return percent + " · " + reset
 }
 
 func renderDashboard(accounts []accountConfig, states map[string]accountState, now time.Time) string {
@@ -86,6 +131,7 @@ func renderDashboard(accounts []accountConfig, states map[string]accountState, n
 	sections = append(sections, dashboardHeading)
 	for _, account := range accounts {
 		state := states[account.ID]
+		state.Type = account.providerType()
 		sections = append(sections, renderAccount(account.Name, state, now))
 	}
 	return strings.Join(sections, "\n\n")

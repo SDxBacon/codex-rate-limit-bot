@@ -11,9 +11,33 @@ import (
 )
 
 type accountConfig struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Home string `json:"home"`
+	ID   string      `json:"id"`
+	Name string      `json:"name"`
+	Home string      `json:"home"`
+	Type accountType `json:"type,omitempty"`
+}
+
+type accountType string
+
+func (t *accountType) UnmarshalJSON(raw []byte) error {
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil || (value != accountCodex && value != accountClaude) {
+		return errors.New("account type must be codex or claude")
+	}
+	*t = accountType(value)
+	return nil
+}
+
+const (
+	accountCodex  = "codex"
+	accountClaude = "claude"
+)
+
+func (a accountConfig) providerType() string {
+	if a.Type == "" {
+		return accountCodex
+	}
+	return string(a.Type)
 }
 
 type appConfig struct {
@@ -36,6 +60,9 @@ func loadConfig(path string) (appConfig, error) {
 	}
 	ids, homes := make(map[string]bool), make(map[string]bool)
 	for i, account := range config.Accounts {
+		if kind := account.providerType(); kind != accountCodex && kind != accountClaude {
+			return appConfig{}, fmt.Errorf("account %d has invalid type", i+1)
+		}
 		if !accountIDPattern.MatchString(account.ID) || ids[account.ID] {
 			return appConfig{}, fmt.Errorf("account %d has invalid or duplicate id", i+1)
 		}
